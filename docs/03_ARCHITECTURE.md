@@ -20,29 +20,29 @@ The system is designed to investigate the supported Kubernetes incident types de
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                                React UI                                      │
-│                         TypeScript + TailwindCSS + shadcn/ui                │
+│                         TypeScript + TailwindCSS + shadcn/ui                 │
 │                                                                              │
-│  Dashboard  ──  Investigation View  ──  Evidence  ──  Recommendation       │
+│  Dashboard  ──  Investigation View  ──  Evidence  ──  Recommendation         │
 │      │                    │                  │                │              │
-│      └────────────────────┴──────────────────┴────────────────┴──────┐       │
-└───────────────────────────────────────────────────────────────────────┼───────┘
-                                                                        │
-                                                                        ▼
+│      └────────────────────┴──────────────────┴────────────────┴              │
+└──────────────────────────────────-|──────────────────────────────────-───────┘
+                                    │
+                                    ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                                FastAPI                                      │
-│                      Investigation / Reporting API                          │
+│                                FastAPI                                       │
+│                      Investigation / Reporting API                           │
 │                                                                              │
-│  Incident Intake  ──  Investigation Orchestrator  ──  Report Builder        │
-│            │                    │                        │                  │
-│            │                    │                        │                  │
-│            ▼                    ▼                        ▼                  │
+│  Incident Intake  ──  Investigation Orchestrator  ──  Report Builder         │
+│            │                    │                        │                   │
+│            │                    │                        │                   │
+│            ▼                    ▼                        ▼                   │
 │     SQLite Persistence   OpenAI Responses API     Approval / Verification    │
 └───────────────────────────────┬──────────────────────────────────────────────┘
                                 │
                                 ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
+┌─────────────────────────────────────────────────────────────────────────────┐
 │                     Kubernetes Tool Layer (Python)                          │
-│                                                                              │
+│                                                                             │
 │   Kubernetes Python Client                                                  │
 │   ├─ Pod / Workload inspection                                              │
 │   ├─ Events and logs                                                        │
@@ -50,7 +50,7 @@ The system is designed to investigate the supported Kubernetes incident types de
 │   ├─ ConfigMap / Secret references                                          │
 │   ├─ Node health                                                            │
 │   └─ Safe recovery actions and verification                                 │
-└──────────────────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
