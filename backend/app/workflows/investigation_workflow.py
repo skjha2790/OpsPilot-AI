@@ -17,6 +17,7 @@ from app.core.exceptions import OpsPilotError
 from app.core.logging import get_logger
 from app.remediation.engine import RemediationEngine
 from app.schemas.investigation import InvestigationRequest, InvestigationResponse
+from app.reports.generator import ReportGenerator
 from app.services.openai_service import OpenAIService
 from app.tools.registry import ToolRegistry
 
@@ -71,10 +72,12 @@ class InvestigationWorkflow:
         tool_registry: ToolRegistry,
         prompt_builder: PromptBuilder | None = None,
         remediation_engine: RemediationEngine | None = None,
+        report_generator: ReportGenerator | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.prompt_builder = prompt_builder or PromptBuilder()
         self.remediation_engine = remediation_engine or RemediationEngine()
+        self.report_generator = report_generator or ReportGenerator()
 
     def run(self, request: InvestigationRequest, openai_service: OpenAIService) -> InvestigationResponse:
         incident = request.incident.strip()
@@ -145,6 +148,29 @@ class InvestigationWorkflow:
                 "recommendation_count": len(remediation_actions),
                 "categories": [action.category for action in remediation_actions],
                 "status": [action.status.value for action in remediation_actions],
+            },
+        )
+
+        report = self.report_generator.generate(
+            incident=incident,
+            investigation=response,
+            evidence=evidence_payload,
+            remediation_actions=remediation_actions,
+            metadata={
+                "openai_model": getattr(openai_service, "model", None),
+                "workflow_version": "m8",
+                "selected_tools": evidence.selected_tools,
+                "failure_count": len(evidence.failures),
+                "tool_result_keys": list(evidence.tool_results.keys()),
+            },
+        )
+
+        logger.info(
+            "investigation_workflow_report_generated",
+            extra={
+                "incident": incident,
+                "report_id": str(report.report_id),
+                "section_count": len(report.investigation_timeline),
             },
         )
 
