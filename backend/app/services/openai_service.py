@@ -58,7 +58,19 @@ class OpenAIService:
         return OpenAI(api_key=self.api_key)
 
     def investigate_incident(self, request: InvestigationRequest) -> InvestigationResponse:
-        incident = request.incident.strip()
+        from app.agents.investigation_agent import create_default_investigation_agent
+
+        agent = create_default_investigation_agent(self)
+        return agent.investigate(request)
+
+    def generate_investigation_response(
+        self,
+        *,
+        incident: str,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> InvestigationResponse:
+        incident = incident.strip()
         if not incident:
             raise OpenAIConfigurationError(
                 "Incident must not be empty.",
@@ -66,10 +78,6 @@ class OpenAIService:
             )
 
         response_schema = InvestigationResponse.model_json_schema()
-        user_prompt = (
-            "Investigate this Kubernetes incident and return structured JSON only: "
-            f"{incident}"
-        )
 
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -85,7 +93,7 @@ class OpenAIService:
 
                 response = self.client.responses.create(
                     model=self.model,
-                    instructions=SYSTEM_PROMPT,
+                    instructions=system_prompt,
                     input=user_prompt,
                     max_output_tokens=512,
                     text={
