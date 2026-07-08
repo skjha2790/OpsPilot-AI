@@ -18,7 +18,7 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:5173", "http://localhost:3000"]
     )
     openai_api_key: str | None = Field(default=None)
-    openai_model: str | None = Field(default=None)
+    openai_model: str = Field(default="gpt-5.4-mini")
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_ROOT / ".env",

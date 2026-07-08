@@ -16,4 +16,4 @@ async def investigate(
     request: InvestigationRequest,
     service: OpenAIService = Depends(get_openai_service),
 ) -> InvestigationResponse:
-    return await run_in_threadpool(service.investigate_incident, request.incident)
+    return await run_in_threadpool(service.investigate_incident, request)

@@ -5,12 +5,13 @@ import time
 from functools import lru_cache
 from typing import Any
 
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI, RateLimitError
+from pydantic import ValidationError
 
 from app.core.config import Settings, get_settings
 from app.core.exceptions import OpsPilotError
 from app.core.logging import get_logger
-from app.schemas.investigation import InvestigationResponse
+from app.schemas.investigation import InvestigationRequest, InvestigationResponse
 
 logger = get_logger(__name__)
 
@@ -42,7 +43,7 @@ class OpenAIService:
     def __init__(self, settings: Settings | None = None, client: OpenAI | None = None) -> None:
         self.settings = settings or get_settings()
         self.api_key = self.settings.openai_api_key
-        self.model = self.settings.openai_model
+        self.model = (self.settings.openai_model or "gpt-5.4-mini").strip() or "gpt-5.4-mini"
         self.client = client or self._build_client()
         self.max_retries = 3
         self.base_retry_delay_seconds = 0.5
@@ -56,21 +57,19 @@ class OpenAIService:
 
         return OpenAI(api_key=self.api_key)
 
-    def investigate_incident(self, incident: str) -> InvestigationResponse:
-        if not incident.strip():
+    def investigate_incident(self, request: InvestigationRequest) -> InvestigationResponse:
+        incident = request.incident.strip()
+        if not incident:
             raise OpenAIConfigurationError(
                 "Incident must not be empty.",
                 status_code=422,
             )
 
-        if not self.model:
-            raise OpenAIConfigurationError(
-                "OPENAI_MODEL is not configured.",
-                status_code=503,
-            )
-
         response_schema = InvestigationResponse.model_json_schema()
-        user_prompt = f"Investigate this Kubernetes incident: {incident}"
+        user_prompt = (
+            "Investigate this Kubernetes incident and return structured JSON only: "
+            f"{incident}"
+        )
 
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -109,10 +108,24 @@ class OpenAIService:
                         "model": self.model,
                         "attempt": attempt,
                         "confidence": investigation.confidence,
-                        "severity": investigation.severity,
+                        # "severity": investigation.severity,
                     },
                 )
                 return investigation
+            except ValidationError as exc:
+                logger.warning(
+                    "openai_investigation_validation_failed",
+                    extra={
+                        "incident": incident,
+                        "model": self.model,
+                        "attempt": attempt,
+                        "error": exc.errors(),
+                    },
+                )
+                raise OpenAIServiceError(
+                    "OpenAI returned an invalid investigation payload.",
+                    status_code=502,
+                ) from exc
             except Exception as exc:  # noqa: BLE001
                 if self._is_transient_error(exc) and attempt < self.max_retries:
                     delay = self.base_retry_delay_seconds * (2 ** (attempt - 1))
@@ -163,24 +176,22 @@ class OpenAIService:
 
     @staticmethod
     def _is_transient_error(exc: Exception) -> bool:
-        status_code = getattr(exc, "status_code", None)
-        if isinstance(status_code, int) and status_code >= 500:
-            return True
-
-        return exc.__class__.__name__ in {
-            "APIConnectionError",
-            "APITimeoutError",
-            "RateLimitError",
-            "InternalServerError",
-        }
+        return isinstance(
+            exc,
+            (
+                APIConnectionError,
+                APITimeoutError,
+                InternalServerError,
+                RateLimitError,
+            ),
+        ) or _status_code_is_transient(exc)
 
     @staticmethod
     def _normalize_exception(exc: Exception) -> OpenAIServiceError:
         if isinstance(exc, OpenAIServiceError):
             return exc
 
-        status_code = getattr(exc, "status_code", None)
-        if isinstance(status_code, int) and status_code >= 500:
+        if _status_code_is_transient(exc):
             return OpenAITransientError(
                 "OpenAI service temporarily unavailable.",
                 status_code=503,
@@ -188,6 +199,11 @@ class OpenAIService:
 
         message = str(exc) or "OpenAI request failed."
         return OpenAIServiceError(message, status_code=502)
+
+
+def _status_code_is_transient(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    return isinstance(status_code, int) and status_code >= 500
 
 
 @lru_cache

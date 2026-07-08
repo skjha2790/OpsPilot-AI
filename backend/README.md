@@ -77,7 +77,7 @@ Set the OpenAI variables in `backend/.env` before testing the investigation endp
 
 ```text
 OPENAI_API_KEY="your_api_key"
-OPENAI_MODEL="your_model_name"
+OPENAI_MODEL="gpt-5.4-mini"
 ```
 
 Example local test from PowerShell:
@@ -88,6 +88,17 @@ Invoke-RestMethod `
   -Uri http://localhost:8000/api/v1/investigate `
   -ContentType "application/json" `
   -Body '{"incident":"CrashLoopBackOff"}'
+```
+
+Expected response fields:
+
+```text
+summary
+root_cause
+confidence
+evidence
+remediation
+recovery_steps
 ```
 
 ## Docker
