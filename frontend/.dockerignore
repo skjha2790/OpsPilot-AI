@@ -1,0 +1,23 @@
+# Node dependency and build output directories
+node_modules/
+dist/
+
+# Local configuration and secret material
+.env
+.env.*
+!.env.example
+
+# Repository metadata and editor files
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# TypeScript build artifacts
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
