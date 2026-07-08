@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agents.prompt_builder import PromptBuilder, PromptBundle
 from app.core.exceptions import OpsPilotError
 from app.core.logging import get_logger
+from app.remediation.engine import RemediationEngine
 from app.schemas.investigation import InvestigationRequest, InvestigationResponse
 from app.services.openai_service import OpenAIService
 from app.tools.registry import ToolRegistry
@@ -69,9 +70,11 @@ class InvestigationWorkflow:
         *,
         tool_registry: ToolRegistry,
         prompt_builder: PromptBuilder | None = None,
+        remediation_engine: RemediationEngine | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.prompt_builder = prompt_builder or PromptBuilder()
+        self.remediation_engine = remediation_engine or RemediationEngine()
 
     def run(self, request: InvestigationRequest, openai_service: OpenAIService) -> InvestigationResponse:
         incident = request.incident.strip()
@@ -127,6 +130,22 @@ class InvestigationWorkflow:
             incident=incident,
             system_prompt=prompt_bundle.system_prompt,
             user_prompt=prompt_bundle.user_prompt,
+        )
+
+        remediation_actions = self.remediation_engine.generate(
+            investigation=response,
+            evidence=evidence_payload,
+        )
+        response.remediation = self.remediation_engine.render_summary(remediation_actions)
+
+        logger.info(
+            "investigation_workflow_remediation_generated",
+            extra={
+                "incident": incident,
+                "recommendation_count": len(remediation_actions),
+                "categories": [action.category for action in remediation_actions],
+                "status": [action.status.value for action in remediation_actions],
+            },
         )
 
         logger.info(
