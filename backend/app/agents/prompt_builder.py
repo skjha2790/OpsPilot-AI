@@ -50,13 +50,24 @@ class PromptBuilder:
         self,
         *,
         incident: str,
+        evidence: dict[str, Any] | None = None,
         tool_outputs: Iterable[dict[str, Any]] | Iterable[ToolContextItem] | None = None,
     ) -> PromptBundle:
         context_items = self._normalize_tool_outputs(tool_outputs)
-        user_payload = {
-            "incident": incident,
-            "kubernetes_evidence": [item.model_dump(mode="json") for item in context_items],
-        }
+        user_payload: dict[str, Any] = {"incident": incident}
+
+        if evidence is not None:
+            user_payload["aggregated_evidence"] = evidence
+        elif context_items:
+            user_payload["aggregated_evidence"] = {
+                "incident": incident,
+                "tool_results": [item.model_dump(mode="json") for item in context_items],
+            }
+        else:
+            user_payload["aggregated_evidence"] = {
+                "incident": incident,
+                "tool_results": [],
+            }
 
         return PromptBundle(
             system_prompt=SYSTEM_PROMPT,
@@ -83,4 +94,3 @@ class PromptBuilder:
             normalized.append(ToolContextItem.model_validate(item))
 
         return normalized
-
