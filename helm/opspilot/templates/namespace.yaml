@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "opspilot.namespace" . }}
+  labels:
+    {{- include "opspilot.labels" . | nindent 4 }}

@@ -1,0 +1,19 @@
+OpsPilot AI has been installed.
+
+To inspect the release:
+
+  helm install opspilot ./helm/opspilot
+  kubectl get pods
+  kubectl get svc
+
+If ingress is enabled, use:
+
+  http://{{ .Values.ingress.host }}
+
+If you need to verify the backend directly:
+
+  kubectl port-forward svc/{{ include "opspilot.backendFullname" . }} 8000:8000
+
+Swagger UI:
+
+  http://{{ .Values.ingress.host }}/docs

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: opspilot
+description: Production-grade Helm chart for OpsPilot AI
+type: application
+version: 0.1.0
+appVersion: "m10"

@@ -1,0 +1,31 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "opspilot.fullname" . }}
+  namespace: {{ include "opspilot.namespace" . }}
+  labels:
+    {{- include "opspilot.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "opspilot.backendFullname" . }}
+                port:
+                  number: {{ .Values.backend.servicePort }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "opspilot.frontendFullname" . }}
+                port:
+                  number: {{ .Values.frontend.servicePort }}
+{{- end }}

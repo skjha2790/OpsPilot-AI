@@ -1,0 +1,43 @@
+namespace: opspilot
+
+backend:
+  image: opspilot-ai-backend
+  tag: latest
+  replicaCount: 2
+  servicePort: 8000
+  appName: OpsPilot AI Backend
+  appVersion: 0.1.0
+  environment: production
+  debug: false
+  logLevel: INFO
+  corsOrigins:
+    - http://localhost:3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+frontend:
+  image: opspilot-ai-frontend
+  tag: latest
+  replicaCount: 2
+  servicePort: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+openai:
+  apiKey: ""
+  model: gpt-5.4-mini
+
+ingress:
+  enabled: true
+  className: nginx
+  host: opspilot.local

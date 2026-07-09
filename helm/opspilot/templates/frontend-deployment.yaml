@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "opspilot.frontendFullname" . }}
+  namespace: {{ include "opspilot.namespace" . }}
+  labels:
+    {{- include "opspilot.metadataLabels" (dict "component" "frontend" "Release" .Release "Chart" .Chart "Values" .Values) | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "opspilot.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "opspilot.metadataLabels" (dict "component" "frontend" "Release" .Release "Chart" .Chart "Values" .Values) | nindent 8 }}
+    spec:
+      containers:
+        - name: frontend
+          image: "{{ .Values.frontend.image }}:{{ .Values.frontend.tag }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: {{ .Values.frontend.servicePort }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}

@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "opspilot.backendFullname" . }}
+  namespace: {{ include "opspilot.namespace" . }}
+  labels:
+    {{- include "opspilot.metadataLabels" (dict "component" "backend" "Release" .Release "Chart" .Chart "Values" .Values) | nindent 4 }}
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "opspilot.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "opspilot.metadataLabels" (dict "component" "backend" "Release" .Release "Chart" .Chart "Values" .Values) | nindent 8 }}
+    spec:
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image }}:{{ .Values.backend.tag }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.servicePort }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "opspilot.configMapName" . }}
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "opspilot.secretName" . }}
+                  key: OPENAI_API_KEY
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
