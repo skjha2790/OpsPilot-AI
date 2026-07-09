@@ -1,0 +1,9 @@
+namespace      = "opspilot"
+backend_image  = "opspilot-ai-backend"
+frontend_image = "opspilot-ai-frontend"
+backend_tag    = "latest"
+frontend_tag   = "latest"
+openai_api_key = "replace-me"
+openai_model   = "gpt-5.4-mini"
+ingress_host   = "opspilot.local"
+replica_count  = 2
