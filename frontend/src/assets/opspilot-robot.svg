@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="260" viewBox="0 0 180 180" fill="none">
+  <defs>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(90 86) rotate(90) scale(86 86)">
+      <stop stop-color="#60A5FA" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#4F46E5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="body" x1="42" y1="44" x2="140" y2="160" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EEF2FF"/>
+    </linearGradient>
+    <linearGradient id="plate" x1="56" y1="62" x2="124" y2="128" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FBFCFF"/>
+      <stop offset="1" stop-color="#E7EAF2"/>
+    </linearGradient>
+    <radialGradient id="eyeGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(0 0) rotate(90) scale(12 14)">
+      <stop stop-color="#60A5FA"/>
+      <stop offset="1" stop-color="#4F46E5" stop-opacity="0.18"/>
+    </radialGradient>
+    <filter id="shadow" x="0" y="0" width="180" height="180" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="14" stdDeviation="12" flood-color="#0F172A" flood-opacity="0.10"/>
+    </filter>
+    <filter id="blur" x="-24" y="-24" width="48" height="48" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+  </defs>
+
+  <circle cx="90" cy="90" r="84" fill="url(#glow)"/>
+  <circle cx="90" cy="90" r="74" fill="none" stroke="#E7EAF2" stroke-opacity="0.7"/>
+  <circle cx="90" cy="90" r="64" fill="none" stroke="#EEF2FF" stroke-opacity="0.8"/>
+
+  <g filter="url(#shadow)">
+    <!-- antenna -->
+    <path d="M90 26c3.2 0 5.8 2.6 5.8 5.8S93.2 37.6 90 37.6s-5.8-2.6-5.8-5.8S86.8 26 90 26Z" fill="#F8FAFF" stroke="#E7EAF2"/>
+    <path d="M90 37.6V50" stroke="#CBD5E1" stroke-width="3.5" stroke-linecap="round"/>
+
+    <!-- head -->
+    <path d="M42 76c0-17.7 14.3-32 32-32h32c17.7 0 32 14.3 32 32v22c0 17.7-14.3 32-32 32H74c-17.7 0-32-14.3-32-32V76Z" fill="url(#body)" stroke="#E7EAF2" stroke-width="2.2"/>
+
+    <!-- face plate -->
+    <path d="M54 82c0-10 8.1-18 18-18h36c9.9 0 18 8 18 18v10c0 10-8.1 18-18 18H72c-9.9 0-18-8-18-18V82Z" fill="url(#plate)" stroke="#E7EAF2"/>
+
+    <!-- eyes -->
+    <g transform="translate(76 88)">
+      <circle cx="0" cy="0" r="12" fill="url(#eyeGlow)" filter="url(#blur)" opacity="0.70"/>
+      <circle cx="0" cy="0" r="6.5" fill="#0B1220" opacity="0.90"/>
+      <circle cx="-2" cy="-2" r="2.2" fill="#FFFFFF" opacity="0.90"/>
+    </g>
+    <g transform="translate(104 88)">
+      <circle cx="0" cy="0" r="12" fill="url(#eyeGlow)" filter="url(#blur)" opacity="0.70"/>
+      <circle cx="0" cy="0" r="6.5" fill="#0B1220" opacity="0.90"/>
+      <circle cx="-2" cy="-2" r="2.2" fill="#FFFFFF" opacity="0.90"/>
+    </g>
+
+    <!-- mouth -->
+    <path d="M76 110h28" stroke="#4F46E5" stroke-opacity="0.55" stroke-width="6" stroke-linecap="round"/>
+
+    <!-- body -->
+    <path d="M50 134c0-11 9-20 20-20h40c11 0 20 9 20 20v8c0 11-9 20-20 20H70c-11 0-20-9-20-20v-8Z" fill="url(#body)" stroke="#E7EAF2" stroke-width="2.2"/>
+
+    <!-- chest -->
+    <path d="M79 130c0-3.3 2.7-6 6-6h10c3.3 0 6 2.7 6 6v9c0 3.3-2.7 6-6 6H85c-3.3 0-6-2.7-6-6v-9Z" fill="#F8FAFF" stroke="#E7EAF2"/>
+    <circle cx="90" cy="134.5" r="3.8" fill="#60A5FA" opacity="0.95"/>
+
+    <!-- arms -->
+    <path d="M40 112c-8 4-11 14-6 21" stroke="#CBD5E1" stroke-width="7" stroke-linecap="round"/>
+    <path d="M140 112c8 4 11 14 6 21" stroke="#CBD5E1" stroke-width="7" stroke-linecap="round"/>
+  </g>
+</svg>

@@ -10,6 +10,15 @@ export default {
         sans: ['Inter', 'ui-sans-serif', 'system-ui'],
       },
       colors: {
+        brand: {
+          600: '#4F46E5',
+          500: '#60A5FA',
+        },
+        surface: {
+          bg: '#FFFFFF',
+          card: '#FFFFFF',
+          border: '#E7EAF2',
+        },
         ink: {
           950: '#050816',
           900: '#09111f',
@@ -23,12 +32,25 @@ export default {
         },
       },
       boxShadow: {
-        glow: '0 0 0 1px rgba(52, 214, 255, 0.12), 0 18px 60px rgba(0, 0, 0, 0.45)',
+        glow: '0 0 0 1px rgba(79, 70, 229, 0.08), 0 18px 60px rgba(15, 23, 42, 0.12)',
       },
       keyframes: {
         fadeUp: {
           '0%': { opacity: '0', transform: 'translateY(14px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        float: {
+          '0%, 100%': { transform: 'translateY(0px)' },
+          '50%': { transform: 'translateY(-8px)' },
+        },
+        shimmer: {
+          '0%': { backgroundPosition: '0% 50%' },
+          '100%': { backgroundPosition: '100% 50%' },
+        },
+        glowSweep: {
+          '0%': { opacity: '0.0', transform: 'translateX(-10%)' },
+          '35%': { opacity: '0.35' },
+          '100%': { opacity: '0.0', transform: 'translateX(110%)' },
         },
         pulseSoft: {
           '0%, 100%': { opacity: '0.45', transform: 'scale(0.98)' },
@@ -37,6 +59,9 @@ export default {
       },
       animation: {
         fadeUp: 'fadeUp 0.6s ease-out both',
+        float: 'float 6s ease-in-out infinite',
+        shimmer: 'shimmer 7s linear infinite',
+        glowSweep: 'glowSweep 2.4s ease-in-out infinite',
         pulseSoft: 'pulseSoft 2.2s ease-in-out infinite',
       },
     },
