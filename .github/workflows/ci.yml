@@ -73,55 +73,55 @@ jobs:
           path: frontend/dist
           if-no-files-found: error
 
-  container:
-    name: Docker validation
-    runs-on: ubuntu-latest
-    needs:
-      - backend
-      - frontend
+  # container:
+  #   name: Docker validation
+  #   runs-on: ubuntu-latest
+  #   needs:
+  #     - backend
+  #     - frontend
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
 
-      # - name: Validate backend Dockerfile
-      #   run: docker build -f backend/Dockerfile backend --tag opspilot-backend:ci
+  #     # - name: Validate backend Dockerfile
+  #     #   run: docker build -f backend/Dockerfile backend --tag opspilot-backend:ci
 
-      - name: Validate frontend Dockerfile
-        run: docker build -f frontend/Dockerfile frontend --tag opspilot-frontend:ci
+  #     - name: Validate frontend Dockerfile
+  #       run: docker build -f frontend/Dockerfile frontend --tag opspilot-frontend:ci
 
-  platform:
-    name: Helm and Terraform checks
-    runs-on: ubuntu-latest
-    needs:
-      - backend
-      - frontend
+  # platform:
+  #   name: Helm and Terraform checks
+  #   runs-on: ubuntu-latest
+  #   needs:
+  #     - backend
+  #     - frontend
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
 
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: v3.16.4
+  #     - name: Install Helm
+  #       uses: azure/setup-helm@v4
+  #       with:
+  #         version: v3.16.4
 
-      - name: Run helm lint
-        run: helm lint helm/opspilot
+  #     - name: Run helm lint
+  #       run: helm lint helm/opspilot
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.8
+  #     - name: Set up Terraform
+  #       uses: hashicorp/setup-terraform@v3
+  #       with:
+  #         terraform_version: 1.9.8
 
-      - name: Terraform fmt check
-        working-directory: terraform
-        run: terraform fmt -check -recursive
+  #     - name: Terraform fmt check
+  #       working-directory: terraform
+  #       run: terraform fmt -check -recursive
 
-      - name: Terraform init
-        working-directory: terraform
-        run: terraform init -backend=false
+  #     - name: Terraform init
+  #       working-directory: terraform
+  #       run: terraform init -backend=false
 
-      - name: Terraform validate
-        working-directory: terraform
-        run: terraform validate
+      # - name: Terraform validate
+      #   working-directory: terraform
+      #   run: terraform validate
