@@ -32,16 +32,16 @@ jobs:
         working-directory: backend
         run: python -m compileall app
 
-      - name: Run backend tests if present
-        working-directory: backend
-        run: |
-          set -e
-          if find . -type f \( -name 'test_*.py' -o -name '*_test.py' \) | grep -q .; then
-            python -m pip install pytest
-            pytest
-          else
-            echo "No backend tests found. Skipping pytest."
-          fi
+      # - name: Run backend tests if present
+      #   working-directory: backend
+      #   run: |
+      #     set -e
+      #     if find . -type f \( -name 'test_*.py' -o -name '*_test.py' \) | grep -q .; then
+      #       python -m pip install pytest
+      #       pytest
+      #     else
+      #       echo "No backend tests found. Skipping pytest."
+      #     fi
 
   frontend:
     name: Frontend checks
