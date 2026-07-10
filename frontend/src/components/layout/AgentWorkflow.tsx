@@ -16,11 +16,11 @@ function formatDuration(durationMs?: number) {
 
 export function AgentWorkflow({ steps }: { steps: AgentRunStep[] }) {
   return (
-    <section className="rounded-[2rem] border border-white/10 bg-[#111827]/90 p-5 shadow-[0_24px_100px_rgba(0,0,0,0.34)] backdrop-blur-2xl">
+    <section className="rounded-xl border border-[#0F172A] bg-[#0F172A] p-6 shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.32em] text-slate-400">Agent Workflow</p>
-          <h3 className="mt-2 text-xl font-semibold text-white">Execution pipeline</h3>
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-300">Agent Workflow</p>
+          <h3 className="mt-2 text-xl font-semibold text-slate-50">Execution pipeline</h3>
         </div>
         <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-slate-200">
           <Timer className="h-3.5 w-3.5 text-cyan-300" />
@@ -36,11 +36,11 @@ export function AgentWorkflow({ steps }: { steps: AgentRunStep[] }) {
           return (
             <div
               key={step.id}
-              className={`group flex items-center gap-3 rounded-2xl border px-3 py-3 transition duration-200 ${
+              className={`group flex items-center gap-3 rounded-2xl border px-3 py-3 transition duration-200 hover:-translate-y-0.5 ${
                 completed
                   ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-50'
                   : running
-                    ? 'border-blue-400/25 bg-blue-500/10 text-white'
+                    ? 'border-blue-400/25 bg-blue-500/10 text-slate-50'
                     : 'border-white/10 bg-white/5 text-slate-300'
               }`}
             >
@@ -63,7 +63,7 @@ export function AgentWorkflow({ steps }: { steps: AgentRunStep[] }) {
               </div>
 
               <div className="min-w-0 flex-1">
-                <p className={`text-sm font-medium ${running ? 'animate-pulse' : ''}`}>{step.title}</p>
+                <p className={`text-sm font-medium ${running ? 'animate-pulseSoft' : ''}`}>{step.title}</p>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-950/80">
                   <div
                     className={`h-full rounded-full transition-all duration-500 ${
@@ -92,4 +92,3 @@ export function AgentWorkflow({ steps }: { steps: AgentRunStep[] }) {
     </section>
   );
 }
-

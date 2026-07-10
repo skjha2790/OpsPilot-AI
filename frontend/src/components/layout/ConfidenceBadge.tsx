@@ -4,14 +4,14 @@ interface ConfidenceBadgeProps {
 
 function getTone(confidence: number) {
   if (confidence >= 80) {
-    return 'border-emerald-400/30 bg-emerald-400/15 text-emerald-200';
+    return 'border-emerald-200 bg-emerald-50 text-emerald-800';
   }
 
   if (confidence >= 50) {
-    return 'border-amber-400/30 bg-amber-400/15 text-amber-200';
+    return 'border-amber-200 bg-amber-50 text-amber-800';
   }
 
-  return 'border-rose-400/30 bg-rose-400/15 text-rose-200';
+  return 'border-rose-200 bg-rose-50 text-rose-800';
 }
 
 export function ConfidenceBadge({ confidence }: ConfidenceBadgeProps) {

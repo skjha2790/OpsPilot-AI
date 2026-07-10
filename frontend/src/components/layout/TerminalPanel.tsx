@@ -19,23 +19,23 @@ function formatTime(ts: number) {
 
 export function TerminalPanel({ lines }: { lines: TerminalLine[] }) {
   return (
-    <section className="rounded-[2rem] border border-white/10 bg-[#0B1220]/90 p-5 shadow-[0_24px_100px_rgba(0,0,0,0.36)] backdrop-blur-2xl">
+    <section className="rounded-[18px] border border-[#E7EAF2] bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <div className="rounded-2xl bg-white/5 p-2 text-cyan-300">
+          <div className="rounded-2xl border border-[#E7EAF2] bg-[#F8FBFF] p-2 text-indigo-600">
             <Terminal className="h-4 w-4" />
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.32em] text-slate-400">Agent Terminal</p>
-            <p className="mt-1 text-sm text-slate-300">Live execution trace</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Agent Terminal</p>
+            <p className="mt-1 text-sm text-slate-600">Live execution trace</p>
           </div>
         </div>
-        <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-slate-200">
+        <div className="rounded-full border border-[#E7EAF2] bg-[#F8FBFF] px-3 py-1 text-xs font-medium text-slate-700">
           {lines.length} lines
         </div>
       </div>
 
-      <div className="mt-4 max-h-[280px] overflow-auto rounded-2xl border border-white/10 bg-black/30 p-4 font-mono text-[12.5px] leading-6">
+      <div className="mt-4 max-h-[280px] overflow-auto rounded-2xl border border-[#E7EAF2] bg-[#0B1220] p-4 font-mono text-[12.5px] leading-6">
         {lines.length === 0 ? (
           <p className="text-slate-500">No output yet.</p>
         ) : (
@@ -52,4 +52,3 @@ export function TerminalPanel({ lines }: { lines: TerminalLine[] }) {
     </section>
   );
 }
-
