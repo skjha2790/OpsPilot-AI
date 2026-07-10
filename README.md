@@ -136,6 +136,14 @@ docker compose up
 docker compose down
 ```
 
+### Windows / managed terminals (optional)
+
+If you see Git "detected dubious ownership" or Docker warnings about reading `~/.docker/config.json`, run:
+
+```powershell
+.\scripts\dev-shell.cmd
+```
+
 ## Helm Deployment
 
 ```bash

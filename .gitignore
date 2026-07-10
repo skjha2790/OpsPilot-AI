@@ -150,12 +150,22 @@ activemq-data/
 # Environments
 .env
 .envrc
+.gitconfig.local
+.docker/
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Certificates / private keys (never commit)
+backend/*.cer
+backend/*.crt
+backend/*.pem
+backend/*.key
+backend/*.pfx
+backend/*.p12
 
 # Spyder project settings
 .spyderproject
