@@ -6,11 +6,7 @@ class InvestigationRequest(BaseModel):
 
     model_config = ConfigDict(
         extra="forbid",
-        json_schema_extra={
-            "example": {
-                "incident": "CrashLoopBackOff",
-            }
-        },
+        json_schema_extra={"example": {"incident": "CrashLoopBackOff in payment-service"}},
     )
 
 
@@ -21,24 +17,17 @@ class InvestigationResponse(BaseModel):
     evidence: list[str] = Field(description="Key evidence items supporting the diagnosis.")
     remediation: str = Field(description="Safe remediation guidance.")
     recovery_steps: list[str] = Field(description="Safe recovery steps to execute or review.")
-
-    model_config = ConfigDict(
-        extra="forbid",
-        json_schema_extra={
-            "example": {
-                "summary": "Application startup failure causing repeated pod restarts.",
-                "root_cause": "Container exits immediately due to failed application startup.",
-                "confidence": 94,
-                "evidence": [
-                    "Container exits immediately after startup.",
-                    "Repeated pod restarts are consistent with a startup failure.",
-                ],
-                "remediation": "Inspect container logs and verify application configuration.",
-                "recovery_steps": [
-                    "Review the failing container logs.",
-                    "Check environment variables and startup command.",
-                    "Restart the workload after fixing the configuration.",
-                ],
-            }
-        },
+    investigation_id: int | None = Field(
+        default=None,
+        description="SQLite row ID assigned after persistence. Used for the approval flow.",
     )
+    tools_called: list[str] = Field(
+        default_factory=list,
+        description="Ordered list of Kubernetes tools the agent called.",
+    )
+    real_k8s: bool = Field(
+        default=False,
+        description="True when evidence was gathered from a live Kubernetes cluster.",
+    )
+
+    model_config = ConfigDict(extra="forbid")

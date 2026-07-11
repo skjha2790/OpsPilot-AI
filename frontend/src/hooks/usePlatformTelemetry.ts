@@ -19,56 +19,55 @@ export interface PlatformStatusSnapshot {
   lastCheckedAt: number;
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
+const API_BASE_URL = (import.meta as unknown as { env: Record<string, string> }).env
+  .VITE_API_BASE_URL ?? '';
 
-function statusFromPercent(value: number): HealthStatus {
-  if (value >= 90) return 'red';
-  if (value >= 75) return 'yellow';
-  return 'green';
-}
-
-function nextTelemetry(previous: ClusterTelemetry): ClusterTelemetry {
-  const cpuDelta = (Math.random() - 0.5) * 8;
-  const memDelta = (Math.random() - 0.5) * 6;
-  const runningDelta = Math.round((Math.random() - 0.5) * 4);
-  const runningPods = clamp(previous.runningPods + runningDelta, 18, 64);
-  const healthyPods = clamp(runningPods - clamp(Math.round(Math.random() * 3), 0, 6), 16, runningPods);
-
-  return {
-    ...previous,
-    runningPods,
-    healthyPods,
-    cpuPercent: clamp(previous.cpuPercent + cpuDelta, 10, 98),
-    memoryPercent: clamp(previous.memoryPercent + memDelta, 12, 96),
-  };
-}
-
-const INITIAL_TELEMETRY: ClusterTelemetry = {
-  runningPods: 34,
-  healthyPods: 32,
-  deployments: 14,
-  namespaces: 9,
-  cpuPercent: 48,
-  memoryPercent: 55,
+const FALLBACK_TELEMETRY: ClusterTelemetry = {
+  runningPods: 0,
+  healthyPods: 0,
+  deployments: 0,
+  namespaces: 0,
+  cpuPercent: 0,
+  memoryPercent: 0,
 };
 
+async function fetchRealTelemetry(signal: AbortSignal): Promise<ClusterTelemetry | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/telemetry`, { signal });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (data.source === 'unavailable') return null;
+    return {
+      runningPods: data.running_pods ?? 0,
+      healthyPods: data.healthy_pods ?? 0,
+      deployments: data.deployments ?? 0,
+      namespaces: data.namespaces ?? 0,
+      // CPU and memory are not returned by the basic telemetry endpoint;
+      // keep zeros until a metrics-server integration is added.
+      cpuPercent: data.cpu_percent ?? 0,
+      memoryPercent: data.memory_percent ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function usePlatformTelemetry({
-  pollMs = 5000,
+  pollMs = 10000,
   openaiHealthy = true,
 }: {
   pollMs?: number;
   openaiHealthy?: boolean;
 } = {}) {
-  const [telemetry, setTelemetry] = useState<ClusterTelemetry>(INITIAL_TELEMETRY);
-  const [status, setStatus] = useState<PlatformStatusSnapshot>(() => ({
+  const [telemetry, setTelemetry] = useState<ClusterTelemetry>(FALLBACK_TELEMETRY);
+  const [k8sAvailable, setK8sAvailable] = useState(false);
+  const [status, setStatus] = useState<PlatformStatusSnapshot>({
     backend: 'yellow',
     openai: openaiHealthy ? 'green' : 'yellow',
     kubernetes: 'yellow',
     agents: 'green',
     lastCheckedAt: Date.now(),
-  }));
+  });
 
   const openaiHealthyRef = useRef(openaiHealthy);
   openaiHealthyRef.current = openaiHealthy;
@@ -77,15 +76,23 @@ export function usePlatformTelemetry({
     const controller = new AbortController();
 
     async function tick() {
-      const backend = await checkBackendStatus(controller.signal);
-      const next = nextTelemetry(telemetry);
-      setTelemetry(next);
+      const [backend, real] = await Promise.all([
+        checkBackendStatus(controller.signal),
+        fetchRealTelemetry(controller.signal),
+      ]);
+
+      if (real) {
+        setTelemetry(real);
+        setK8sAvailable(true);
+      } else {
+        setK8sAvailable(false);
+      }
 
       setStatus({
         backend,
         openai: openaiHealthyRef.current ? 'green' : 'yellow',
-        kubernetes: statusFromPercent(Math.max(next.cpuPercent, next.memoryPercent)),
-        agents: 'green',
+        kubernetes: real ? 'green' : 'yellow',
+        agents: backend === 'green' ? 'green' : 'yellow',
         lastCheckedAt: Date.now(),
       });
     }
@@ -96,15 +103,13 @@ export function usePlatformTelemetry({
       controller.abort();
       window.clearInterval(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pollMs]);
 
   const derived = useMemo(() => {
     const overall: HealthStatus =
       status.backend === 'red' ? 'red' : status.kubernetes === 'red' ? 'red' : status.openai === 'yellow' ? 'yellow' : 'green';
-    return { overall };
-  }, [status.backend, status.kubernetes, status.openai]);
+    return { overall, k8sAvailable };
+  }, [status.backend, status.kubernetes, status.openai, k8sAvailable]);
 
   return { telemetry, status, derived };
 }
-

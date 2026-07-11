@@ -1,9 +1,4 @@
-"""Investigation agent orchestration for OpsPilot AI.
-
-The agent is intentionally thin in this milestone: it provides the stable
-entrypoint that receives a request, logs the incident, and delegates the full
-workflow to the investigation workflow layer.
-"""
+"""Investigation agent orchestration for OpsPilot AI."""
 
 from __future__ import annotations
 
@@ -45,15 +40,9 @@ class InvestigationAgent(BaseAgent):
     def investigate(self, request: InvestigationRequest) -> InvestigationResponse:
         incident = request.incident.strip()
         if not incident:
-            raise InvestigationAgentError(
-                "Incident must not be empty.",
-                status_code=422,
-            )
+            raise InvestigationAgentError("Incident must not be empty.", status_code=422)
 
-        logger.info(
-            "investigation_agent_incident_received",
-            extra={"incident": incident},
-        )
+        logger.info("investigation_agent_incident_received", extra={"incident": incident})
 
         try:
             return self.workflow.run(request, self.openai_service)
@@ -61,7 +50,7 @@ class InvestigationAgent(BaseAgent):
             raise
         except OpsPilotError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception(
                 "investigation_agent_failed",
                 extra={"incident": incident, "error_type": exc.__class__.__name__},
@@ -73,10 +62,18 @@ class InvestigationAgent(BaseAgent):
 
 
 def create_default_investigation_agent(openai_service: OpenAIService) -> InvestigationAgent:
-    """Build the default agent stack used by the current backend service."""
+    """Build the agent with real Kubernetes tools, falling back gracefully."""
+    from app.tools.kubernetes import DeploymentTool, EventTool, NodeTool, PodTool
+    from app.tools.registry import ToolRegistry
 
-    from app.tools.kubernetes import PodTool
+    try:
+        registry = ToolRegistry([PodTool(), EventTool(), DeploymentTool(), NodeTool()])
+        logger.info("investigation_agent_tools_loaded", extra={"source": "real_kubernetes"})
+    except Exception as exc:
+        logger.warning(
+            "investigation_agent_tools_fallback",
+            extra={"error": str(exc)},
+        )
+        registry = ToolRegistry([PodTool()])
 
-    registry = ToolRegistry([PodTool()])
     return InvestigationAgent(tool_registry=registry, openai_service=openai_service)
-

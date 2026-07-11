@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api/v1", tags=["Investigations"])
 @router.post(
     "/investigate",
     response_model=InvestigationResponse,
-    summary="Investigate a Kubernetes incident with OpenAI",
+    summary="Investigate a Kubernetes incident with real agentic tool calling",
 )
 async def investigate(
     request: InvestigationRequest,

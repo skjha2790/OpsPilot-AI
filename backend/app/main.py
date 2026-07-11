@@ -4,8 +4,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.investigate import router as investigate_router
 from app.api.health import router as health_router
+from app.api.history import router as history_router
+from app.api.investigate import router as investigate_router
+from app.api.remediation import router as remediation_router
+from app.api.stream import router as stream_router
+from app.api.telemetry import router as telemetry_router
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
@@ -17,6 +21,9 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    from app.db.database import init_db
+
+    init_db()
     logger.info(
         "backend_startup",
         extra={
@@ -32,16 +39,9 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
-        description=(
-            "Backend foundation for OpsPilot AI, an OpenAI Agentic AI Hackathon MVP "
-            "for Kubernetes incident investigation and safe recovery."
-        ),
-        contact={
-            "name": "OpsPilot AI",
-        },
-        license_info={
-            "name": "MIT",
-        },
+        description="OpsPilot AI — Autonomous Kubernetes Incident Investigation.",
+        contact={"name": "OpsPilot AI"},
+        license_info={"name": "MIT"},
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
@@ -59,6 +59,10 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(investigate_router)
+    app.include_router(stream_router)
+    app.include_router(remediation_router)
+    app.include_router(history_router)
+    app.include_router(telemetry_router)
 
     return app
 
