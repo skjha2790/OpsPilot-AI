@@ -85,10 +85,10 @@ class PodTool(BaseTool):
                         "node": p.spec.node_name,
                     }
                 )
-            logger.info("tool_get_pods", extra={"namespace": namespace, "count": len(result)})
+            logger.info("tool_get_pods", extra={"ns": namespace, "cnt": len(result)})
             return {"pods": result, "namespace": namespace}
         except Exception as exc:
-            logger.exception("tool_get_pods_failed", extra={"namespace": namespace})
+            logger.exception("tool_get_pods_failed", extra={"ns": namespace})
             return {"error": str(exc), "namespace": namespace}
 
     def _get_logs(self, name: str, namespace: str, previous: bool) -> dict[str, Any]:
@@ -100,11 +100,11 @@ class PodTool(BaseTool):
                 tail_lines=80,
                 previous=previous,
             )
-            logger.info("tool_get_logs", extra={"pod": name, "namespace": namespace, "previous": previous})
-            return {"pod": name, "namespace": namespace, "previous": previous, "logs": logs}
+            logger.info("tool_get_logs", extra={"pod_name": name, "namespace": namespace, "previous": previous})
+            return {"pod_name": name, "namespace": namespace, "previous": previous, "logs": logs}
         except Exception as exc:
-            logger.exception("tool_get_logs_failed", extra={"pod": name})
-            return {"pod": name, "error": str(exc)}
+            logger.exception("tool_get_logs_failed", extra={"pod_name": name})
+            return {"pod_name": name, "error": str(exc)}
 
     def _describe_pod(self, name: str, namespace: str) -> dict[str, Any]:
         try:
@@ -145,7 +145,7 @@ class PodTool(BaseTool):
                 {"reason": e.reason, "message": e.message, "type": e.type, "count": e.count}
                 for e in sorted(events_resp.items, key=lambda x: x.last_timestamp or "", reverse=True)[:15]
             ]
-            logger.info("tool_describe_pod", extra={"pod": name, "namespace": namespace})
+            logger.info("tool_describe_pod", extra={"pod_name": name, "namespace": namespace})
             return {
                 "name": pod.metadata.name,
                 "namespace": pod.metadata.namespace,
@@ -156,8 +156,8 @@ class PodTool(BaseTool):
                 "events": events,
             }
         except Exception as exc:
-            logger.exception("tool_describe_pod_failed", extra={"pod": name})
-            return {"pod": name, "error": str(exc)}
+            logger.exception("tool_describe_pod_failed", extra={"pod_name": name})
+            return {"pod_name": name, "error": str(exc)}
 
 
 class EventTool(BaseTool):
@@ -182,10 +182,10 @@ class EventTool(BaseTool):
                 }
                 for e in sorted(events_resp.items, key=lambda x: x.last_timestamp or "", reverse=True)[:25]
             ]
-            logger.info("tool_get_events", extra={"namespace": namespace, "count": len(events)})
+            logger.info("tool_get_events", extra={"ns": namespace, "count": len(events)})
             return {"events": events, "namespace": namespace}
         except Exception as exc:
-            logger.exception("tool_get_events_failed", extra={"namespace": namespace})
+            logger.exception("tool_get_events_failed", extra={"ns": namespace})
             return {"error": str(exc), "namespace": namespace}
 
 
@@ -217,10 +217,10 @@ class DeploymentTool(BaseTool):
                         "conditions": conditions,
                     }
                 )
-            logger.info("tool_get_deployments", extra={"namespace": namespace, "count": len(result)})
+            logger.info("tool_get_deployments", extra={"ns": namespace, "cnt": len(result)})
             return {"deployments": result, "namespace": namespace}
         except Exception as exc:
-            logger.exception("tool_get_deployments_failed", extra={"namespace": namespace})
+            logger.exception("tool_get_deployments_failed", extra={"ns": namespace})
             return {"error": str(exc), "namespace": namespace}
 
 
@@ -250,8 +250,10 @@ class NodeTool(BaseTool):
                         ],
                     }
                 )
-            logger.info("tool_get_nodes", extra={"count": len(result)})
+            logger.info("tool_get_nodes", extra={"cnt": len(result)})
             return {"nodes": result}
         except Exception as exc:
             logger.exception("tool_get_nodes_failed")
             return {"error": str(exc)}
+
+

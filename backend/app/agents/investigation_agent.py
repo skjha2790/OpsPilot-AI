@@ -63,12 +63,12 @@ class InvestigationAgent(BaseAgent):
 
 def create_default_investigation_agent(openai_service: OpenAIService) -> InvestigationAgent:
     """Build the agent with real Kubernetes tools, falling back gracefully."""
-    from app.tools.kubernetes import DeploymentTool, EventTool, NodeTool, PodTool
+    from app.tools.k8s_tools import EventTool, NodeTool, PodTool
     from app.tools.registry import ToolRegistry
 
     try:
-        registry = ToolRegistry([PodTool(), EventTool(), DeploymentTool(), NodeTool()])
-        logger.info("investigation_agent_tools_loaded", extra={"source": "real_kubernetes"})
+        registry = ToolRegistry([PodTool(), EventTool(), NodeTool()])
+        logger.info("investigation_agent_tools_loaded", extra={"src": "real_kubernetes"})
     except Exception as exc:
         logger.warning(
             "investigation_agent_tools_fallback",

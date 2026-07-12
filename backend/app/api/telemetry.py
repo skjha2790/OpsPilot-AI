@@ -83,3 +83,17 @@ def get_telemetry() -> dict:
             "source": "unavailable",
             "error": str(exc),
         }
+try:
+    from kubernetes.client import CustomObjectsApi
+    custom = CustomObjectsApi()
+    node_metrics = custom.list_cluster_custom_object(
+        "metrics.k8s.io", "v1beta1", "nodes"
+    )
+    total_cpu = sum(
+        int(n["usage"]["cpu"].rstrip("n"))
+        for n in node_metrics["items"]
+    ) / 1e9  # convert nanocores to cores
+    return_dict["cpu_percent"] = round(total_cpu * 100 / 2, 1)  # 2 cores Kind default
+except Exception:
+    pass  # metrics-server not available
+
