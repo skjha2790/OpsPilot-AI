@@ -295,7 +295,7 @@ def run_agentic_loop(
     emit({"type": "agent_step", "agent": "Incident Classification Agent", "status": "running"})
 
     for turn in range(MAX_TURNS):
-        logger.info("agentic_loop_turn", extra={"turn": turn, "incident": incident})
+        logger.info("agentic_loop_turn", extra={"turn_num": turn, "inc": incident[:50]})
 
         emit({"type": "agent_step", "agent": "Incident Classification Agent", "status": "completed"})
         emit({"type": "agent_step", "agent": "Kubernetes Discovery Agent", "status": "running"})
@@ -307,7 +307,7 @@ def run_agentic_loop(
         )
 
         # Preserve ALL output items including reasoning — required by the API.
-        messages.append({"role": "assistant", "content": response.output})
+        messages.extend(response.output)
 
         tool_calls = [
             item
@@ -363,9 +363,9 @@ def run_agentic_loop(
 
             logger.info(
                 "agentic_tool_call",
-                extra={"tool": tool_name, "args": args, "turn": turn},
+                extra={"tool": tool_name, "tool_args": str(args), "turn": turn},
             )
-            emit({"type": "tool_call", "tool": tool_name, "args": args})
+            emit({"type": "tool_call", "tool": tool_name, "tool_args": str(args)})
 
             agent_label = _tool_to_agent_label(tool_name)
             emit({"type": "agent_step", "agent": agent_label, "status": "running"})

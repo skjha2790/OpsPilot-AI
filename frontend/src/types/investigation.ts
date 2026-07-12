@@ -1,4 +1,4 @@
-export interface InvestigationRequest {
+﻿export interface InvestigationRequest {
   incident: string;
 }
 
@@ -9,6 +9,9 @@ export interface InvestigationResponse {
   evidence: string[];
   remediation: string;
   recovery_steps: string[];
+  investigation_id?: number | null;
+  tools_called?: string[];
+  real_k8s?: boolean;
 }
 
 export interface InvestigationState {
@@ -19,4 +22,5 @@ export interface InvestigationState {
   startedAt: string | null;
   completedAt: string | null;
 }
+
 

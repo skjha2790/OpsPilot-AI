@@ -46,7 +46,8 @@ import { InvestigationHistory } from '../components/layout/InvestigationHistory'
 import { MetricCard } from '../components/layout/MetricCard';
 import { useInvestigationHistory } from '../hooks/useInvestigationHistory';
 import { usePlatformTelemetry } from '../hooks/usePlatformTelemetry';
-import { useInvestigation } from '../hooks/useInvestigation';
+import { useStreamingInvestigation } from '../hooks/useStreamingInvestigation';
+import type { AgentEvent } from '../hooks/useStreamingInvestigation';
 import type { DemoIncidentScenario } from '../demo/incidents';
 import { DEMO_INCIDENTS } from '../demo/incidents';
 import { KpiCard } from '../components/layout/KpiCard';
@@ -332,7 +333,11 @@ function ResultSkeleton() {
 }
 
 export function DashboardPage() {
-  const { incident, setIncident, result, loading, error, startedAt, completedAt, runInvestigation } = useInvestigation();
+  const {
+  incident, setIncident, result, loading, error,
+  startedAt, completedAt, runInvestigation,
+  investigationId, agentEvents,
+} = useStreamingInvestigation();
   const [currentAgentIndex, setCurrentAgentIndex] = useState(0);
   const [durations, setDurations] = useState<Record<string, number | undefined>>({});
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([]);
@@ -347,8 +352,39 @@ export function DashboardPage() {
   const history = useInvestigationHistory();
   const { telemetry, status } = usePlatformTelemetry({ pollMs: 5000, openaiHealthy: Boolean(result) || !error });
 
+// Drive terminal from real SSE events
+useEffect(() => {
+  if (agentEvents.length === 0) return;
+  const last = agentEvents[agentEvents.length - 1];
+  if (!last) return;
+  if (last.type === 'tool_call' && last.tool) {
+    setTerminalLines((lines) => [
+      ...lines,
+      makeTerminalLine(`[Tool] ${last.tool}(${JSON.stringify(last.args ?? {})})`),
+    ].slice(-80));
+  }
+  if (last.type === 'tool_result' && last.tool) {
+    setTerminalLines((lines) => [
+      ...lines,
+      makeTerminalLine(`[Result] ${last.tool} — data received`, 'success'),
+    ].slice(-80));
+  }
+  if (last.type === 'complete' && last.result) {
+    setTerminalLines((lines) => [
+      ...lines,
+      makeTerminalLine(`[AI] Root cause: ${(last.result as any)?.root_cause ?? ''}`, 'success'),
+      makeTerminalLine('[Reporter] RCA saved to database', 'success'),
+    ].slice(-80));
+  }
+  if (last.type === 'error') {
+    setTerminalLines((lines) => [
+      ...lines,
+      makeTerminalLine(`[Error] ${last.message ?? 'Unknown'}`, 'warning'),
+    ].slice(-80));
+  }
+}, [agentEvents]);
   useEffect(() => {
-    if (!loading) return undefined;
+    if (!loading) return;
 
     // Reset workflow state for a new investigation.
     setCurrentAgentIndex(0);
@@ -478,13 +514,13 @@ export function DashboardPage() {
 
     setCurrentAgentIndex(pipeline.length);
     setTerminalLines((lines) => {
-      const next = [
-        ...lines,
-        makeTerminalLine(`[AI] Summary: ${result.summary}`),
-        makeTerminalLine('[Reporter] Report generated', 'success'),
-      ];
-      return next.slice(-80);
-    });
+        const next = [
+          ...lines,
+          makeTerminalLine(`[AI] Summary: ${result.summary ?? ''}`),
+          makeTerminalLine('[Reporter] Report generated', 'success'),
+        ];
+        return next.slice(-80);
+      });
 
     if (completedAt && lastRecordedAtRef.current !== completedAt) {
       lastRecordedAtRef.current = completedAt;
@@ -492,7 +528,7 @@ export function DashboardPage() {
         incident,
         severity: selectedDemo.severity,
         outcome: approvalState === 'rejected' ? 'rejected' : 'completed',
-        confidence: result.confidence,
+        confidence: result.confidence ?? selectedDemo.confidence,
       });
     }
   }, [approvalState, completedAt, history, incident, loading, result, selectedDemo.id, selectedDemo.severity]);
@@ -501,7 +537,7 @@ export function DashboardPage() {
   const confidenceTone = useMemo(() => {
     if (confidence >= 80) return 'text-emerald-400';
     if (confidence >= 50) return 'text-amber-400';
-    return 'text-rose-400';
+    return 'text-rose-700';
   }, [confidence]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -746,7 +782,7 @@ export function DashboardPage() {
                   <div className="flex flex-wrap gap-2 text-xs font-medium text-slate-700">
                     <span className="rounded-full border border-[#E2E8F0] bg-[#F8FBFF] px-3 py-1">FastAPI</span>
                     <span className="rounded-full border border-[#E2E8F0] bg-[#F8FBFF] px-3 py-1">Responses API</span>
-                    <span className="rounded-full border border-[#E2E8F0] bg-[#F8FBFF] px-3 py-1">Mock Kubernetes Tools</span>
+                    <span className="rounded-full border border-[#E2E8F0] bg-[#F8FBFF] px-3 py-1">Kubernetes Python Client</span>
                   </div>
 
                   <button
@@ -828,16 +864,40 @@ export function DashboardPage() {
               approved={approved}
               rejected={rejected}
               explanation={decisionExplanation(severity)}
-              onApprove={() => {
+              onApprove={async () => {
                 setApprovalState('approved');
+                if (investigationId) {
+                  try {
+                    const { approveRemediation } = await import('../services/remediationService');
+                    const rem = await approveRemediation(investigationId);
+                    setTerminalLines((lines) => [
+                      ...lines,
+                      makeTerminalLine(
+                        rem.verified_healthy
+                          ? `[Remediator] ✓ ${rem.deployment_name} restarted — pods verified healthy`
+                          : `[Remediator] ⚠ ${rem.deployment_name} restarted — verify manually`,
+                        rem.verified_healthy ? 'success' : 'warning',
+                      ),
+                    ]);
+                  } catch (err) {
+                    setTerminalLines((lines) => [
+                      ...lines,
+                      makeTerminalLine(`[Remediator] Error: ${(err as Error).message}`, 'warning'),
+                    ]);
+                  }
+                }
                 setTerminalLines((lines) => [
                   ...lines,
                   makeTerminalLine('[Decision] Approved by human operator', 'success'),
                   makeTerminalLine('[Remediator] Executing: kubectl rollout restart deployment/<deployment>', 'warning'),
                 ]);
               }}
-              onReject={() => {
+              onReject={async () => {
                 setApprovalState('rejected');
+                if (investigationId) {
+                  const { rejectRemediation } = await import('../services/remediationService');
+                  await rejectRemediation(investigationId).catch(() => null);
+                }
                 setTerminalLines((lines) => [
                   ...lines,
                   makeTerminalLine('[Decision] Rejected by human operator', 'warning'),
@@ -853,7 +913,7 @@ export function DashboardPage() {
                   <div className="rounded-[2rem] border border-white/10 bg-[#111827]/85 p-5 backdrop-blur-2xl">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-xs uppercase tracking-[0.32em] text-slate-400">Execution State</p>
+                        <p className="text-xs uppercase tracking-[0.32em] text-slate-700">Execution State</p>
                         <h3 className="mt-2 text-xl font-semibold text-white">Agent is synthesizing evidence</h3>
                       </div>
                       <div className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs font-medium text-cyan-200">
@@ -863,7 +923,7 @@ export function DashboardPage() {
                     <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-950/80">
                       <div className="h-full w-3/4 animate-pulse rounded-full bg-gradient-to-r from-blue-500 via-cyan-400 to-emerald-400" />
                     </div>
-                    <p className="mt-4 text-sm leading-7 text-slate-400">
+                    <p className="mt-4 text-sm leading-7 text-slate-700">
                       The platform is selecting tools, gathering mock Kubernetes evidence, and preparing the prompt for
                       the OpenAI reasoning pass.
                     </p>
