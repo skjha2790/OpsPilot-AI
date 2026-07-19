@@ -4,7 +4,6 @@ ENV PYTHONUNBUFFERED=1
 ENV UV_LINK_MODE=copy
 WORKDIR /app
 
-# Corporate TLS interception fix
 COPY cloud-services-root.cer /tmp/cloud-services-root.cer
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates openssl sed \
