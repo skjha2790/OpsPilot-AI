@@ -11,7 +11,7 @@ export interface AgentRunStep {
 
 function formatDuration(durationMs?: number) {
   if (!durationMs || durationMs <= 0) return '--';
-  return `${(durationMs / 1000).toFixed(1)}s`;
+  return `${Math.max(durationMs / 1000, 0.1).toFixed(1)}s`;
 }
 
 export function AgentWorkflow({ steps }: { steps: AgentRunStep[] }) {

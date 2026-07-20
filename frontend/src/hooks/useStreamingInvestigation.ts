@@ -14,6 +14,7 @@ export interface InvestigationResult {
 
 export interface AgentEvent {
   type: "agent_step" | "tool_call" | "tool_result" | "complete" | "saved" | "error";
+  ts?: number;
   agent?: string;
   status?: "waiting" | "running" | "completed";
   tool?: string;
@@ -124,7 +125,6 @@ export function useStreamingInvestigation() {
                   next.investigationId = event.investigation_id ?? null;
                   next.namespace = event.namespace ?? null;
                   next.deploymentName = event.deployment_name ?? null;
-                  next.loading = false;
                 }
                 if (event.type === "error") {
                   next.error = event.message ?? "Investigation failed.";

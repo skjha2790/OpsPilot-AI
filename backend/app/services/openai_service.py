@@ -58,6 +58,7 @@ class OpenAIService:
         """Use the real agentic loop if Kubernetes is available, else fallback."""
         from app.agents.investigation_agent import create_default_investigation_agent
         from app.db.database import find_similar_past_incidents, save_investigation
+        from app.services.report_service import build_and_store_report
         from app.services.agentic_loop import run_agentic_loop
 
         agent = create_default_investigation_agent(self)
@@ -75,7 +76,7 @@ class OpenAIService:
             )
 
         try:
-            result, tools_called = run_agentic_loop(
+            result, tools_called, deployment_name, namespace, tool_results = run_agentic_loop(
                 incident=incident_with_context,
                 registry=agent.tool_registry,
                 openai_client=self.client,
@@ -87,7 +88,23 @@ class OpenAIService:
                 response=result,
                 tools_called=tools_called,
                 real_k8s=True,
+                namespace=namespace,
+                deployment_name=deployment_name,
             )
+            try:
+                build_and_store_report(
+                    investigation_id=investigation_id,
+                    incident=request.incident,
+                    investigation=result,
+                    tools_called=tools_called,
+                    tool_results=tool_results,
+                    openai_model=self.model,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "investigation_report_persist_failed",
+                    extra={"investigation_id": investigation_id, "error": str(exc)},
+                )
             result.investigation_id = investigation_id
             result.tools_called = tools_called
             result.real_k8s = True

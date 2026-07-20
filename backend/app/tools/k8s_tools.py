@@ -17,12 +17,16 @@ logger = get_logger(__name__)
 def _load_k8s_config() -> None:
     from kubernetes import config
 
+    if getattr(_load_k8s_config, "_loaded", False):
+        return
+
     try:
         config.load_incluster_config()
         logger.info("k8s_config_loaded", extra={"source": "in_cluster"})
     except Exception:
         config.load_kube_config()
         logger.info("k8s_config_loaded", extra={"source": "kubeconfig"})
+    _load_k8s_config._loaded = True
 
 
 def _core_v1():
@@ -37,6 +41,39 @@ def _apps_v1():
 
     _load_k8s_config()
     return client.AppsV1Api()
+
+
+def _to_yaml_like(value: Any, indent: int = 0) -> str:
+    pad = " " * indent
+    if isinstance(value, dict):
+        lines: list[str] = []
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                lines.append(f"{pad}{key}:")
+                lines.append(_to_yaml_like(item, indent + 2))
+            else:
+                lines.append(f"{pad}{key}: {item!s}")
+        return "\n".join(lines)
+    if isinstance(value, list):
+        lines = []
+        for item in value:
+            if isinstance(item, (dict, list)):
+                lines.append(f"{pad}-")
+                lines.append(_to_yaml_like(item, indent + 2))
+            else:
+                lines.append(f"{pad}- {item!s}")
+        return "\n".join(lines)
+    return f"{pad}{value!s}"
+
+
+def _event_sort_key(event: Any):
+    return (
+        getattr(event, "event_time", None)
+        or getattr(event, "last_timestamp", None)
+        or getattr(event, "first_timestamp", None)
+        or getattr(getattr(event, "metadata", None), "creation_timestamp", None)
+        or ""
+    )
 
 
 class PodTool(BaseTool):
@@ -92,6 +129,8 @@ class PodTool(BaseTool):
             return {"error": str(exc), "namespace": namespace}
 
     def _get_logs(self, name: str, namespace: str, previous: bool) -> dict[str, Any]:
+        from kubernetes.client.rest import ApiException
+
         try:
             v1 = _core_v1()
             logs = v1.read_namespaced_pod_log(
@@ -101,10 +140,43 @@ class PodTool(BaseTool):
                 previous=previous,
             )
             logger.info("tool_get_logs", extra={"pod_name": name, "namespace": namespace, "previous": previous})
-            return {"pod_name": name, "namespace": namespace, "previous": previous, "logs": logs}
+            return {
+                "pod_name": name,
+                "namespace": namespace,
+                "previous_requested": previous,
+                "previous_used": previous,
+                "logs": logs,
+            }
+        except ApiException as exc:
+            if previous and exc.status == 400:
+                logger.info(
+                    "tool_get_logs_previous_fallback",
+                    extra={"pod_name": name, "namespace": namespace},
+                )
+                try:
+                    v1 = _core_v1()
+                    logs = v1.read_namespaced_pod_log(
+                        name=name,
+                        namespace=namespace,
+                        tail_lines=80,
+                        previous=False,
+                    )
+                    return {
+                        "pod_name": name,
+                        "namespace": namespace,
+                        "previous_requested": True,
+                        "previous_used": False,
+                        "fallback_reason": "previous_container_unavailable",
+                        "logs": logs,
+                    }
+                except Exception as fallback_exc:
+                    logger.exception("tool_get_logs_fallback_failed", extra={"pod_name": name})
+                    return {"pod_name": name, "namespace": namespace, "error": str(fallback_exc)}
+            logger.exception("tool_get_logs_failed", extra={"pod_name": name})
+            return {"pod_name": name, "namespace": namespace, "error": str(exc)}
         except Exception as exc:
             logger.exception("tool_get_logs_failed", extra={"pod_name": name})
-            return {"pod_name": name, "error": str(exc)}
+            return {"pod_name": name, "namespace": namespace, "error": str(exc)}
 
     def _describe_pod(self, name: str, namespace: str) -> dict[str, Any]:
         try:
@@ -143,7 +215,7 @@ class PodTool(BaseTool):
                 )
             events = [
                 {"reason": e.reason, "message": e.message, "type": e.type, "count": e.count}
-                for e in sorted(events_resp.items, key=lambda x: x.last_timestamp or "", reverse=True)[:15]
+                for e in sorted(events_resp.items, key=_event_sort_key, reverse=True)[:15]
             ]
             logger.info("tool_describe_pod", extra={"pod_name": name, "namespace": namespace})
             return {
@@ -180,7 +252,7 @@ class EventTool(BaseTool):
                     "object_kind": e.involved_object.kind,
                     "count": e.count,
                 }
-                for e in sorted(events_resp.items, key=lambda x: x.last_timestamp or "", reverse=True)[:25]
+                for e in sorted(events_resp.items, key=_event_sort_key, reverse=True)[:25]
             ]
             logger.info("tool_get_events", extra={"ns": namespace, "count": len(events)})
             return {"events": events, "namespace": namespace}
@@ -196,9 +268,12 @@ class DeploymentTool(BaseTool):
     description = "List deployments and their readiness state in a namespace."
 
     def execute(self, operation: str, **kwargs: Any) -> Any:
+        from kubernetes import client
+
         namespace = kwargs.get("namespace", "default")
         try:
             apps = _apps_v1()
+            api_client = client.ApiClient()
             deps = apps.list_namespaced_deployment(namespace=namespace)
             result = []
             for d in deps.items:
@@ -206,6 +281,7 @@ class DeploymentTool(BaseTool):
                     {"type": c.type, "status": c.status, "message": c.message}
                     for c in (d.status.conditions or [])
                 ]
+                manifest = api_client.sanitize_for_serialization(d)
                 result.append(
                     {
                         "name": d.metadata.name,
@@ -215,6 +291,7 @@ class DeploymentTool(BaseTool):
                         "available": d.status.available_replicas or 0,
                         "image": d.spec.template.spec.containers[0].image if d.spec.template.spec.containers else None,
                         "conditions": conditions,
+                        "manifest_yaml": _to_yaml_like(manifest),
                     }
                 )
             logger.info("tool_get_deployments", extra={"ns": namespace, "cnt": len(result)})
@@ -255,5 +332,3 @@ class NodeTool(BaseTool):
         except Exception as exc:
             logger.exception("tool_get_nodes_failed")
             return {"error": str(exc)}
-
-

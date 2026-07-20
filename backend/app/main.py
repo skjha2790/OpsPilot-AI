@@ -8,6 +8,7 @@ from app.api.health import router as health_router
 from app.api.history import router as history_router
 from app.api.investigate import router as investigate_router
 from app.api.remediation import router as remediation_router
+from app.api.reports import router as reports_router
 from app.api.stream import router as stream_router
 from app.api.telemetry import router as telemetry_router
 from app.core.config import get_settings
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(investigate_router)
     app.include_router(stream_router)
     app.include_router(remediation_router)
+    app.include_router(reports_router)
     app.include_router(history_router)
     app.include_router(telemetry_router)
 

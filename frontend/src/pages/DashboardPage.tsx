@@ -52,6 +52,12 @@ import type { DemoIncidentScenario } from '../demo/incidents';
 import { DEMO_INCIDENTS } from '../demo/incidents';
 import { KpiCard } from '../components/layout/KpiCard';
 import robotIllustrationUrl from '../assets/opspilot-robot.svg';
+import {
+  getHtmlReportUrl,
+  getInvestigationReport,
+  getPdfReportUrl,
+  type InvestigationReport,
+} from '../services/reportService';
 
 function pipelineForIncident(incidentId: string) {
   const base = [
@@ -151,8 +157,40 @@ const featureCards = [
 function makeAgentSteps(pipeline: ReadonlyArray<{ id: string; title: string }>, currentIndex: number, durations: Record<string, number | undefined>): AgentRunStep[] {
   return pipeline.map((agent, index) => {
     const status = index < currentIndex ? 'completed' : index === currentIndex ? 'running' : 'waiting';
-    const durationMs = durations[agent.id];
+    const durationMs = durations[agent.id] ?? durations[agent.title];
     return { ...agent, status, durationMs };
+  });
+}
+
+function makeAgentStepsFromEvents(
+  pipeline: ReadonlyArray<{ id: string; title: string }>,
+  agentEvents: AgentEvent[],
+  durations: Record<string, number | undefined>,
+  severity: IncidentSeverity,
+  approvalState: 'idle' | 'awaiting' | 'approved' | 'rejected',
+  resultReady: boolean,
+): AgentRunStep[] {
+  const titleToStatus = new Map<string, AgentRunStep['status']>();
+  for (const event of agentEvents) {
+    if (event.type === 'agent_step' && event.agent && event.status) {
+      titleToStatus.set(event.agent, event.status);
+    }
+  }
+
+  return pipeline.map((agent) => {
+    let status = titleToStatus.get(agent.title) ?? 'waiting';
+    if (agent.id === 'decision' && severity === 'P1' && resultReady) {
+      status = approvalState === 'approved' || approvalState === 'rejected'
+        ? 'completed'
+        : 'running';
+    }
+    if (agent.id === 'verification' && severity === 'P1' && approvalState === 'approved') {
+      status = 'completed';
+    }
+    if (agent.id === 'report' && resultReady) {
+      status = 'completed';
+    }
+    return { ...agent, status, durationMs: durations[agent.id] ?? durations[agent.title] };
   });
 }
 
@@ -163,6 +201,168 @@ function makeTerminalLine(text: string, tone?: TerminalLine['tone']): TerminalLi
     text,
     tone,
   };
+}
+
+function deriveAgentDurationsFromEvents(agentEvents: AgentEvent[], loading: boolean): Record<string, number> {
+  const started = new Map<string, number>();
+  const durations: Record<string, number> = {};
+  const now = Date.now();
+
+  for (const event of agentEvents) {
+    if (event.type !== 'agent_step' || !event.agent) continue;
+    const ts = event.ts ?? now;
+    if (event.status === 'running') {
+      started.set(event.agent, ts);
+      continue;
+    }
+    if (event.status === 'completed') {
+      const start = started.get(event.agent) ?? ts - 100;
+      const elapsed = Math.max(100, ts - start);
+      durations[event.agent] = (durations[event.agent] ?? 0) + elapsed;
+      started.delete(event.agent);
+    }
+  }
+
+  if (loading) {
+    for (const [agent, start] of started.entries()) {
+      durations[agent] = Math.max(durations[agent] ?? 0, Math.max(100, now - start));
+    }
+  }
+
+  return durations;
+}
+
+function extractToolEntries(reportData: InvestigationReport | null, toolName: string) {
+  const rawValues = Object.values(reportData?.kubernetes_evidence.tool_results ?? {});
+  return rawValues.filter((value) => {
+    if (!value || typeof value !== 'object') return false;
+    return (value as { tool?: string }).tool === toolName;
+  }) as Array<{ tool: string; arguments?: Record<string, unknown>; output?: Record<string, unknown> }>;
+}
+
+function extractLiveLogs(reportData: InvestigationReport | null, fallback: string[]) {
+  for (const entry of extractToolEntries(reportData, 'get_pod_logs')) {
+    const logs = entry.output?.logs;
+    if (typeof logs === 'string' && logs.trim()) {
+      return logs.split('\n').filter(Boolean);
+    }
+  }
+  return fallback;
+}
+
+function extractLiveEvents(reportData: InvestigationReport | null, fallback: string[]) {
+  const namespaceEvents = extractToolEntries(reportData, 'get_events');
+  for (const entry of namespaceEvents) {
+    const events = entry.output?.events;
+    if (Array.isArray(events) && events.length > 0) {
+      return [
+        'Events:',
+        '  Type     Reason                Count  Object                   Message',
+        '  ----     ------                -----  ------                   -------',
+        ...events.slice(0, 8).map((evt) => {
+          const event = evt as Record<string, unknown>;
+          return `  ${String(event.type ?? 'Normal').padEnd(8)} ${String(event.reason ?? 'Unknown').padEnd(20)} ${String(event.count ?? 1).padEnd(5)} ${String(event.object ?? '-').padEnd(24)} ${String(event.message ?? '')}`;
+        }),
+      ];
+    }
+  }
+  return [
+    'Events:',
+    '  Type     Reason     Age    From               Message',
+    '  ----     ------     ---    ----               -------',
+    ...fallback.map((evt) => `  Warning  Event      0s     kubelet/node-xyz     ${evt}`),
+  ];
+}
+
+function extractDeploymentYaml(reportData: InvestigationReport | null, deploymentName: string | null, fallback: string) {
+  for (const entry of extractToolEntries(reportData, 'get_deployments')) {
+    const deployments = entry.output?.deployments;
+    if (!Array.isArray(deployments)) continue;
+    const match = deployments.find((item) => {
+      if (!item || typeof item !== 'object') return false;
+      if (!deploymentName) return true;
+      return (item as { name?: string }).name === deploymentName;
+    }) as { manifest_yaml?: string } | undefined;
+    if (typeof match?.manifest_yaml === 'string' && match.manifest_yaml.trim()) {
+      return match.manifest_yaml;
+    }
+  }
+  return fallback;
+}
+
+function extractPrimaryPodName(reportData: InvestigationReport | null) {
+  for (const entry of extractToolEntries(reportData, 'describe_pod')) {
+    const name = entry.output?.name;
+    if (typeof name === 'string' && name) return name;
+  }
+  for (const entry of extractToolEntries(reportData, 'get_pod_logs')) {
+    const name = entry.output?.pod_name;
+    if (typeof name === 'string' && name) return name;
+  }
+  return '<pod-name>';
+}
+
+function buildLiveReasoning(
+  reportData: InvestigationReport | null,
+  result: { root_cause?: string; confidence?: number } | null,
+  fallback: string,
+) {
+  if (!reportData || !result) return [fallback];
+  const tools = reportData.kubernetes_evidence.selected_tools;
+  const evidenceKeys = Object.keys(reportData.kubernetes_evidence.tool_results);
+  return [
+    `The agent validated the incident using real cluster evidence collected through ${tools.length > 0 ? tools.join(', ') : 'Kubernetes tools'}.`,
+    `Root cause selection was based on ${evidenceKeys.length} captured evidence block(s), then ranked against the live pod, event, and workload state.`,
+    `The current RCA concludes: ${result.root_cause ?? reportData.root_cause}. Confidence remained at ${result.confidence ?? reportData.ai_confidence}% after cross-checking the gathered evidence.`,
+  ];
+}
+
+function commandStepsForLiveInvestigation(
+  scenario: DemoIncidentScenario,
+  reportData: InvestigationReport | null,
+  namespace: string | null,
+  deploymentName: string | null,
+): ExecutableStep[] {
+  const resolvedNamespace = namespace || 'default';
+  const resolvedDeployment = deploymentName || '<deployment>';
+  const resolvedPod = extractPrimaryPodName(reportData);
+
+  const realRestartCommand =
+    reportData?.recommended_remediation.find((item) => item.kubectl_command)?.kubectl_command ||
+    `kubectl rollout restart deployment/${resolvedDeployment} -n ${resolvedNamespace}`;
+
+  return [
+    {
+      id: `${scenario.id}-logs`,
+      title: 'Collect logs',
+      command: `kubectl -n ${resolvedNamespace} logs ${resolvedPod} --tail=200`,
+      explanation: 'Capture recent pod logs from the affected workload to confirm the startup or runtime error signature.',
+    },
+    {
+      id: `${scenario.id}-describe`,
+      title: 'Describe pod',
+      command: `kubectl -n ${resolvedNamespace} describe pod ${resolvedPod}`,
+      explanation: 'Review container state, exit codes, conditions, warnings, and pod-level events from the affected pod.',
+    },
+    {
+      id: `${scenario.id}-restart`,
+      title: 'Restart deployment',
+      command: realRestartCommand,
+      explanation: 'Apply the primary remediation against the workload that the investigation identified as impacted.',
+    },
+    {
+      id: `${scenario.id}-rollout-status`,
+      title: 'Watch rollout status',
+      command: `kubectl rollout status deployment/${resolvedDeployment} -n ${resolvedNamespace} --timeout=120s`,
+      explanation: 'Wait until Kubernetes confirms the new ReplicaSet is available and the rollout finishes cleanly.',
+    },
+    {
+      id: `${scenario.id}-pods`,
+      title: 'Verify pods',
+      command: `kubectl get pods -n ${resolvedNamespace} -o wide`,
+      explanation: 'Verify that replacement pods are Running and Ready on healthy nodes and that restart counts stabilize.',
+    },
+  ];
 }
 
 function decisionExplanation(severity: IncidentSeverity) {
@@ -334,13 +534,14 @@ function ResultSkeleton() {
 
 export function DashboardPage() {
   const {
-  incident, setIncident, result, loading, error,
-  startedAt, completedAt, runInvestigation,
-  investigationId, agentEvents,
-} = useStreamingInvestigation();
+    incident, setIncident, result, loading, error,
+    startedAt, completedAt, runInvestigation,
+    investigationId, agentEvents, namespace, deploymentName,
+  } = useStreamingInvestigation();
   const [currentAgentIndex, setCurrentAgentIndex] = useState(0);
   const [durations, setDurations] = useState<Record<string, number | undefined>>({});
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([]);
+  const [reportData, setReportData] = useState<InvestigationReport | null>(null);
   const [selectedDemo, setSelectedDemo] = useState<DemoIncidentScenario>(() => {
     return DEMO_INCIDENTS.find((scenario) => scenario.incidentText === incident) ?? DEMO_INCIDENTS[0];
   });
@@ -351,10 +552,26 @@ export function DashboardPage() {
   const lastRecordedAtRef = useRef<string | null>(null);
   const history = useInvestigationHistory();
   const { telemetry, status } = usePlatformTelemetry({ pollMs: 5000, openaiHealthy: Boolean(result) || !error });
+  const severity = selectedDemo.severity as IncidentSeverity;
+  const eventDurations = useMemo(() => deriveAgentDurationsFromEvents(agentEvents, loading), [agentEvents, loading]);
+  const effectiveDurations = agentEvents.length > 0 ? eventDurations : durations;
+
+  useEffect(() => {
+    if (!investigationId) return;
+    let active = true;
+    void getInvestigationReport(investigationId)
+      .then((payload) => {
+        if (active) setReportData(payload);
+      })
+      .catch(() => null);
+    return () => {
+      active = false;
+    };
+  }, [investigationId]);
 
 // Drive terminal from real SSE events
-useEffect(() => {
-  if (agentEvents.length === 0) return;
+  useEffect(() => {
+    if (agentEvents.length === 0) return;
   const last = agentEvents[agentEvents.length - 1];
   if (!last) return;
   if (last.type === 'tool_call' && last.tool) {
@@ -366,7 +583,7 @@ useEffect(() => {
   if (last.type === 'tool_result' && last.tool) {
     setTerminalLines((lines) => [
       ...lines,
-      makeTerminalLine(`[Result] ${last.tool} — data received`, 'success'),
+      makeTerminalLine(`[Result] ${last.tool} - data received`, 'success'),
     ].slice(-80));
   }
   if (last.type === 'complete' && last.result) {
@@ -382,11 +599,12 @@ useEffect(() => {
       makeTerminalLine(`[Error] ${last.message ?? 'Unknown'}`, 'warning'),
     ].slice(-80));
   }
-}, [agentEvents]);
+  }, [agentEvents]);
   useEffect(() => {
     if (!loading) return;
 
     // Reset workflow state for a new investigation.
+    setReportData(null);
     setCurrentAgentIndex(0);
     agentIndexRef.current = 0;
     agentStartTsRef.current = Date.now();
@@ -401,101 +619,17 @@ useEffect(() => {
         selectedDemo.severity === 'P0' ? 'warning' : 'default',
       ),
     ]);
+  }, [loading, selectedDemo]);
 
-    const pipeline = pipelineForIncident(selectedDemo.id);
-
-    const timer = window.setInterval(() => {
-      const now = Date.now();
-      const currentIndex = agentIndexRef.current;
-      const currentAgent = pipeline[currentIndex];
-
-      if (!currentAgent) return;
-
-      // If we're at the last agent, keep it running until the backend completes.
-      if (currentIndex >= pipeline.length - 1) {
-        return;
-      }
-
-      // Gate remediation execution for P1 until approval is granted.
-      if (selectedDemo.severity === 'P1' && currentAgent.id === 'decision' && approvalState !== 'approved') {
-        setApprovalState('awaiting');
-        return;
-      }
-
-      // P2: stop after RCA; no remediation path.
-      if (selectedDemo.severity === 'P2' && (currentAgent.id === 'risk' || currentAgent.id === 'decision')) {
-        return;
-      }
-
-      const stepDuration = now - agentStartTsRef.current;
-      const nextIndex = currentIndex + 1;
-      const nextAgent = pipeline[nextIndex];
-
-      durationsRef.current = { ...durationsRef.current, [currentAgent.id]: stepDuration };
-      setDurations(durationsRef.current);
-
-      agentIndexRef.current = nextIndex;
-      agentStartTsRef.current = now;
-      setCurrentAgentIndex(nextIndex);
-
-      // Emit terminal-style trace lines as the pipeline advances.
-      setTerminalLines((lines) => {
-        const nextLines: TerminalLine[] = [...lines];
-
-        if (currentAgent.id === 'classification') {
-          nextLines.push(makeTerminalLine(`[Classifier] Confidence signal ${selectedDemo.confidence}%`));
-        }
-        if (nextAgent.id === 'discovery') {
-          nextLines.push(makeTerminalLine('[Kubernetes] Discovering cluster context'));
-          nextLines.push(makeTerminalLine('[Kubernetes] Getting pods'));
-        }
-        if (nextAgent.id === 'events') {
-          nextLines.push(makeTerminalLine('[Kubernetes] Getting events'));
-          nextLines.push(makeTerminalLine(`[Kubernetes] Event: ${selectedDemo.events[0] ?? 'No events available'}`));
-        }
-        if (nextAgent.id === 'logs') {
-          nextLines.push(makeTerminalLine('[Logs] Collecting logs'));
-          nextLines.push(makeTerminalLine(`[Logs] ${selectedDemo.logs[0] ?? 'No logs available'}`));
-        }
-        if (nextAgent.id === 'rca') {
-          nextLines.push(makeTerminalLine('[AI] Generating RCA'));
-        }
-        if (nextAgent.id === 'decision') {
-          if (selectedDemo.severity === 'P0') {
-            nextLines.push(makeTerminalLine('[Decision] Auto remediation permitted'));
-            nextLines.push(makeTerminalLine('[Remediator] Executing: kubectl rollout restart deployment/<deployment>', 'warning'));
-          } else if (selectedDemo.severity === 'P1') {
-            nextLines.push(makeTerminalLine('[Decision] Human approval required', 'warning'));
-          } else {
-            nextLines.push(makeTerminalLine('[Decision] Remediation disabled for P2'));
-          }
-        }
-        if (nextAgent.id === 'registry') {
-          nextLines.push(makeTerminalLine('[Registry] Validating image tag and pull credentials'));
-        }
-        if (nextAgent.id === 'resources') {
-          nextLines.push(makeTerminalLine('[Resources] Checking memory limits and node pressure signals'));
-        }
-        if (nextAgent.id === 'config') {
-          nextLines.push(makeTerminalLine('[Config] Validating ConfigMap references and mount paths'));
-        }
-        if (nextAgent.id === 'node') {
-          nextLines.push(makeTerminalLine('[Node] Evaluating node readiness and eviction signals'));
-        }
-        if (nextAgent.id === 'verification') {
-          nextLines.push(makeTerminalLine('[Verification] Waiting for pods to stabilize'));
-        }
-        if (nextAgent.id === 'report') {
-          nextLines.push(makeTerminalLine('[Reporter] Generating report payload'));
-        }
-
-        // Keep the terminal from growing unbounded.
-        return nextLines.slice(-80);
-      });
-    }, 720);
-
-    return () => window.clearInterval(timer);
-  }, [approvalState, loading, selectedDemo]);
+  useEffect(() => {
+    if (severity === 'P1' && result && investigationId && approvalState === 'idle') {
+      setApprovalState('awaiting');
+      setTerminalLines((lines) => [
+        ...lines,
+        makeTerminalLine('[Decision] Human approval required', 'warning'),
+      ].slice(-80));
+    }
+  }, [approvalState, investigationId, result, severity]);
 
   useEffect(() => {
     if (loading) return;
@@ -547,13 +681,31 @@ useEffect(() => {
 
   const agentSteps = useMemo(() => {
     const pipeline = pipelineForIncident(selectedDemo.id);
-    if (loading) return makeAgentSteps(pipeline, currentAgentIndex, durations);
-    if (!result) return pipeline.map((agent) => ({ ...agent, status: 'waiting' as const, durationMs: durations[agent.id] }));
-    return pipeline.map((agent) => ({ ...agent, status: 'completed' as const, durationMs: durations[agent.id] }));
-  }, [currentAgentIndex, durations, loading, result, selectedDemo.id]);
+    if (agentEvents.length > 0) {
+      return makeAgentStepsFromEvents(pipeline, agentEvents, effectiveDurations, severity, approvalState, Boolean(result));
+    }
+    if (loading) return makeAgentSteps(pipeline, currentAgentIndex, effectiveDurations);
+    if (!result) {
+      return pipeline.map((agent) => ({
+        ...agent,
+        status: 'waiting' as const,
+        durationMs: effectiveDurations[agent.id] ?? effectiveDurations[agent.title],
+      }));
+    }
+    return pipeline.map((agent) => ({
+      ...agent,
+      status: 'completed' as const,
+      durationMs: effectiveDurations[agent.id] ?? effectiveDurations[agent.title],
+    }));
+  }, [agentEvents, approvalState, currentAgentIndex, effectiveDurations, loading, result, selectedDemo.id, severity]);
 
-  const severity = selectedDemo.severity as IncidentSeverity;
-  const awaitingApproval = approvalState === 'awaiting';
+  const awaitingApproval =
+    severity === 'P1' &&
+    !loading &&
+    Boolean(result) &&
+    Boolean(investigationId) &&
+    approvalState !== 'approved' &&
+    approvalState !== 'rejected';
   const approved = approvalState === 'approved';
   const rejected = approvalState === 'rejected';
 
@@ -567,6 +719,21 @@ useEffect(() => {
       remediations: wobble(4.2),
     };
   }, []);
+
+  const liveLogs = useMemo(() => extractLiveLogs(reportData, selectedDemo.logs), [reportData, selectedDemo.logs]);
+  const liveEvents = useMemo(() => extractLiveEvents(reportData, selectedDemo.events), [reportData, selectedDemo.events]);
+  const liveDeploymentYaml = useMemo(
+    () => extractDeploymentYaml(reportData, deploymentName, selectedDemo.deploymentYaml),
+    [deploymentName, reportData, selectedDemo.deploymentYaml],
+  );
+  const liveReasoning = useMemo(
+    () => buildLiveReasoning(reportData, result, selectedDemo.aiReasoning),
+    [reportData, result, selectedDemo.aiReasoning],
+  );
+  const liveCommandSteps = useMemo(
+    () => commandStepsForLiveInvestigation(selectedDemo, reportData, namespace, deploymentName),
+    [deploymentName, namespace, reportData, selectedDemo],
+  );
 
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-white text-slate-900">
@@ -906,6 +1073,29 @@ useEffect(() => {
               }}
             />
 
+            {investigationId ? (
+              <div className="flex flex-wrap justify-end gap-3">
+                <a
+                  href={getHtmlReportUrl(investigationId)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 rounded-full border border-[#E2E8F0] bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:text-[#1D4ED8]"
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Open RCA Report
+                </a>
+                <a
+                  href={getPdfReportUrl(investigationId)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 rounded-full border border-[#E2E8F0] bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:text-[#1D4ED8]"
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Open PDF Report
+                </a>
+              </div>
+            ) : null}
+
             {loading ? (
               <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
                 <AgentWorkflow steps={agentSteps} />
@@ -924,7 +1114,7 @@ useEffect(() => {
                       <div className="h-full w-3/4 animate-pulse rounded-full bg-gradient-to-r from-blue-500 via-cyan-400 to-emerald-400" />
                     </div>
                     <p className="mt-4 text-sm leading-7 text-slate-700">
-                      The platform is selecting tools, gathering mock Kubernetes evidence, and preparing the prompt for
+                      The platform is selecting tools, gathering live Kubernetes evidence, and preparing the prompt for
                       the OpenAI reasoning pass.
                     </p>
                   </div>
@@ -960,33 +1150,26 @@ useEffect(() => {
                 </ul>
               </ExpandablePanel>
 
-              <ExpandablePanel title="Logs" subtitle="Sample application logs (demo) or captured output.">
-                <LogTerminalBlock lines={selectedDemo.logs} />
+              <ExpandablePanel title="Logs" subtitle="Captured application logs or latest pod output.">
+                <LogTerminalBlock lines={liveLogs} />
               </ExpandablePanel>
 
               <ExpandablePanel title="Events" subtitle="kubectl describe-like output for recent event history.">
-                <KubectlDescribeBlock
-                  lines={[
-                    'Events:',
-                    '  Type     Reason     Age    From               Message',
-                    '  ----     ------     ---    ----               -------',
-                    ...selectedDemo.events.map((evt) => `  Warning  Event      0s     kubelet/node-xyz     ${evt}`),
-                  ]}
-                />
+                <KubectlDescribeBlock lines={liveEvents} />
               </ExpandablePanel>
 
               <ExpandablePanel title="Deployment YAML" subtitle="Relevant Kubernetes manifests used for inspection.">
-                <YamlCodeBlock yaml={selectedDemo.deploymentYaml} />
+                <YamlCodeBlock yaml={liveDeploymentYaml} />
               </ExpandablePanel>
 
               <ExpandablePanel title="AI Reasoning" subtitle="Why the agent reached this conclusion.">
-                <p className="text-sm leading-7 text-slate-700">{selectedDemo.aiReasoning}</p>
-                {result ? (
-                  <p className="mt-4 text-sm leading-7 text-slate-600">
-                    The investigation response prioritized evidence items listed above, then formed the root cause and
-                    recommended remediation with the model's confidence estimate.
-                  </p>
-                ) : null}
+                <div className="space-y-3">
+                  {liveReasoning.map((item) => (
+                    <p key={item} className="text-sm leading-7 text-slate-700">
+                      {item}
+                    </p>
+                  ))}
+                </div>
               </ExpandablePanel>
 
               <ExpandablePanel title="Verification" subtitle="What to check after remediation or change.">
@@ -1001,7 +1184,7 @@ useEffect(() => {
               </ExpandablePanel>
 
               <ExpandablePanel title="Commands" subtitle="Suggested kubectl commands for evidence, remediation, and verification.">
-                <ExecutableSteps steps={commandStepsForScenario(selectedDemo)} />
+                <ExecutableSteps steps={result ? liveCommandSteps : commandStepsForScenario(selectedDemo)} />
                 <div className="mt-4 rounded-2xl border border-[#E2E8F0] bg-white p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-600">Recommended remediation</p>
                   <p className="mt-2 text-sm leading-7 text-slate-700">{result?.remediation ?? selectedDemo.remediation}</p>

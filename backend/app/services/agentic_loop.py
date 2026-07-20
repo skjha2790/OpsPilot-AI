@@ -1,17 +1,22 @@
 """Real agentic investigation loop using OpenAI tool/function calling.
 
-The model decides which Kubernetes tools to call and in what order based on
-the evidence it collects each turn. This is genuine agentic behaviour: no
-keyword matching, no fixed pipeline. The loop runs until the model decides it
-has sufficient evidence or until the turn budget is exhausted.
+The loop now combines evidence-driven orchestration with model-directed follow-up
+tool calls:
 
-An optional event_callback receives structured progress events so callers
-can stream them as Server-Sent Events to the frontend.
+1. The orchestrator collects an initial set of mandatory Kubernetes evidence
+   from the real cluster.
+2. The OpenAI Responses API reasons over that evidence and may still call more
+   tools if required.
+
+This keeps the workflow genuinely agentic while ensuring core discovery, events,
+and logs are gathered for production-relevant incidents.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -136,17 +141,18 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
 ]
 
 SYSTEM_PROMPT = """\
-You are OpsPilot AI — an autonomous Kubernetes SRE investigation agent.
+You are OpsPilot AI - an autonomous Kubernetes SRE investigation agent.
 
-Your task is to investigate a Kubernetes incident by calling tools to gather \
+Your task is to investigate a Kubernetes incident by calling tools to gather
 real evidence from the cluster, then reason to a confident root cause.
 
 Investigation rules:
-- Always start with get_pods to see the current cluster state.
-- Choose subsequent tools based on what the evidence tells you — not a fixed order.
+- Inspect the current cluster state first.
+- Choose subsequent tools based on what the evidence tells you - not a fixed order.
 - If a pod is crashing, call get_pod_logs with previous=true.
 - If pods are Pending, check get_events and get_nodes for scheduling failures.
 - If you see image pull errors in events, call get_deployments to confirm the image.
+- For startup or crash incidents, do not conclude before considering pod details, logs, and namespace events.
 - Stop calling tools as soon as you have sufficient evidence. Be efficient.
 - If evidence is insufficient after all reasonable tool calls, say so with low confidence.
 - Never invent evidence. Only cite data you actually received from a tool.
@@ -164,43 +170,45 @@ When you have enough evidence, respond ONLY with valid JSON (no markdown, no pre
 """
 
 
+def _infer_namespace_from_incident(incident: str) -> str:
+    match = re.search(r"(?:namespace\s+|in\s+)([a-z0-9][a-z0-9-]*)", incident, re.IGNORECASE)
+    return match.group(1) if match else "default"
+
+
 def _extract_deployment_from_tool_output(
     tool_name: str,
     output: Any,
     namespace_hint: str,
 ) -> tuple[str | None, str | None]:
-    """Extract the first unhealthy or relevant deployment name and namespace
-    from a real tool result. Returns (deployment_name, namespace)."""
+    """Extract the first unhealthy or relevant deployment name and namespace."""
     if tool_name == "get_pods":
         pods = output.get("pods", []) if isinstance(output, dict) else []
         ns = output.get("namespace", namespace_hint) if isinstance(output, dict) else namespace_hint
-        # Prefer a pod that is crashing or not ready
         for pod in pods:
             if not isinstance(pod, dict):
                 continue
             if pod.get("reason") in (
-                "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull",
-                "OOMKilled", "Error", "CreateContainerConfigError",
-            ) or pod.get("restarts", 0) > 3:
+                "CrashLoopBackOff",
+                "ImagePullBackOff",
+                "ErrImagePull",
+                "OOMKilled",
+                "Error",
+                "CreateContainerConfigError",
+            ) or pod.get("restarts", 0) > 0:
                 raw_name: str = pod.get("name", "")
-                # Pod names follow <deployment>-<replicaset-hash>-<pod-hash>
-                # Strip the last two dash-separated tokens to get deployment name.
                 parts = raw_name.rsplit("-", 2)
                 if len(parts) >= 3:
                     return parts[0], ns
                 if len(parts) == 2:
                     return parts[0], ns
-        # Fallback: first pod in the list
         if pods and isinstance(pods[0], dict):
             raw_name = pods[0].get("name", "")
-            ns_val = output.get("namespace", namespace_hint) if isinstance(output, dict) else namespace_hint
             parts = raw_name.rsplit("-", 2)
-            return (parts[0] if len(parts) >= 2 else raw_name), ns_val
+            return (parts[0] if len(parts) >= 2 else raw_name), ns
 
     if tool_name == "get_deployments":
         deps = output.get("deployments", []) if isinstance(output, dict) else []
         ns = output.get("namespace", namespace_hint) if isinstance(output, dict) else namespace_hint
-        # Prefer a deployment where ready < desired
         for dep in deps:
             if not isinstance(dep, dict):
                 continue
@@ -208,7 +216,6 @@ def _extract_deployment_from_tool_output(
             ready = dep.get("ready") or 0
             if ready < desired:
                 return dep.get("name"), dep.get("namespace") or ns
-        # Fallback: first deployment
         if deps and isinstance(deps[0], dict):
             return deps[0].get("name"), deps[0].get("namespace") or ns
 
@@ -254,32 +261,135 @@ def _dispatch(name: str, arguments: dict[str, Any], registry: ToolRegistry) -> A
         return {"error": str(exc), "tool": name}
 
 
+def _pick_primary_pod(output: Any) -> dict[str, Any] | None:
+    pods = output.get("pods", []) if isinstance(output, dict) else []
+    candidates = [pod for pod in pods if isinstance(pod, dict)]
+    if not candidates:
+        return None
+
+    def priority(pod: dict[str, Any]) -> tuple[int, int]:
+        reason = str(pod.get("reason") or "")
+        phase = str(pod.get("phase") or "")
+        restarts = int(pod.get("restarts") or 0)
+        if reason in {"CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "OOMKilled", "CreateContainerConfigError"}:
+            return (0, -restarts)
+        if phase in {"Pending", "Failed", "Unknown"}:
+            return (1, -restarts)
+        return (2, -restarts)
+
+    return sorted(candidates, key=priority)[0]
+
+
+def _mandatory_follow_up_calls(get_pods_output: Any, namespace: str) -> list[tuple[str, dict[str, Any]]]:
+    pod = _pick_primary_pod(get_pods_output)
+    if not pod:
+        return [("get_deployments", {"namespace": namespace}), ("get_events", {"namespace": namespace})]
+
+    pod_name = str(pod.get("name") or "")
+    reason = str(pod.get("reason") or "")
+    phase = str(pod.get("phase") or "")
+    restarts = int(pod.get("restarts") or 0)
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+    if pod_name:
+        calls.append(("describe_pod", {"name": pod_name, "namespace": namespace}))
+
+    if reason in {"CrashLoopBackOff", "OOMKilled", "Error", "CreateContainerConfigError"} or phase == "Failed" or restarts > 0:
+        if pod_name:
+            calls.append(("get_pod_logs", {"name": pod_name, "namespace": namespace, "previous": True}))
+        calls.append(("get_events", {"namespace": namespace}))
+
+    if reason in {"ImagePullBackOff", "ErrImagePull"}:
+        calls.append(("get_events", {"namespace": namespace}))
+        calls.append(("get_deployments", {"namespace": namespace}))
+
+    if phase == "Pending":
+        calls.append(("get_events", {"namespace": namespace}))
+        calls.append(("get_nodes", {}))
+
+    deduped: list[tuple[str, dict[str, Any]]] = []
+    seen: set[tuple[str, str]] = set()
+    for tool_name, args in calls:
+        key = (tool_name, json.dumps(args, sort_keys=True))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((tool_name, args))
+    return deduped
+
+
+def _tool_to_agent_label(tool_name: str) -> str:
+    mapping = {
+        "get_pods": "Pod Inspection Agent",
+        "get_pod_logs": "Logs Collection Agent",
+        "describe_pod": "Pod Inspection Agent",
+        "get_events": "Events Collection Agent",
+        "get_deployments": "Kubernetes Discovery Agent",
+        "get_nodes": "Node Diagnostics Agent",
+    }
+    return mapping.get(tool_name, "Tool Execution Agent")
+
+
+def _extract_deployment_from_recovery_steps(steps: list[str]) -> str | None:
+    for step in steps:
+        match = re.search(
+            r"deployment[s]?/([a-z0-9][a-z0-9-]{1,52})",
+            step,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1)
+        match = re.search(
+            r"deploy/([a-z0-9][a-z0-9-]{1,52})",
+            step,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1)
+    return None
+
+
 def run_agentic_loop(
     incident: str,
     registry: ToolRegistry,
     openai_client: Any,
     model: str,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
-) -> tuple[InvestigationResponse, list[str], str | None, str | None]:
+) -> tuple[InvestigationResponse, list[str], str | None, str | None, dict[str, Any]]:
     """Run the agentic investigation loop.
 
     Returns:
-        (InvestigationResponse, tools_called, deployment_name, namespace)
-
-    deployment_name and namespace are extracted from real tool results —
-    not inferred from the incident text — so remediation targets the
-    actual affected workload the agent discovered in the cluster.
-
-    If event_callback is provided it is called with structured progress
-    events suitable for Server-Sent Events streaming.
+        (InvestigationResponse, tools_called, deployment_name, namespace, tool_results)
     """
 
     def emit(event: dict[str, Any]) -> None:
         if event_callback:
             try:
+                if "ts" not in event:
+                    event["ts"] = int(time.time() * 1000)
                 event_callback(event)
             except Exception:
                 pass
+
+    def record_tool_execution(tool_name: str, args: dict[str, Any], turn: int) -> Any:
+        tools_called.append(tool_name)
+        logger.info(
+            "agentic_tool_call",
+            extra={"tool": tool_name, "tool_args": str(args), "turn": turn},
+        )
+        emit({"type": "tool_call", "tool": tool_name, "args": args})
+        agent_label = _tool_to_agent_label(tool_name)
+        emit({"type": "agent_step", "agent": agent_label, "status": "running"})
+        output = _dispatch(tool_name, args, registry)
+        evidence_key = f"tool_call_{len(tools_called):02d}_{tool_name}"
+        tool_evidence[evidence_key] = {
+            "tool": tool_name,
+            "arguments": args,
+            "output": output,
+        }
+        emit({"type": "tool_result", "tool": tool_name, "output": output})
+        emit({"type": "agent_step", "agent": agent_label, "status": "completed"})
+        return output
 
     messages: list[Any] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -287,18 +397,50 @@ def run_agentic_loop(
     ]
 
     tools_called: list[str] = []
-    # Track the deployment and namespace the agent actually found.
+    tool_evidence: dict[str, Any] = {}
     discovered_deployment: str | None = None
     discovered_namespace: str | None = None
+    namespace_hint = _infer_namespace_from_incident(incident)
 
+    emit({"type": "agent_step", "agent": "Incident Intake Agent", "status": "running"})
     emit({"type": "agent_step", "agent": "Incident Intake Agent", "status": "completed"})
     emit({"type": "agent_step", "agent": "Incident Classification Agent", "status": "running"})
+    emit({"type": "agent_step", "agent": "Incident Classification Agent", "status": "completed"})
+    emit({"type": "agent_step", "agent": "Kubernetes Discovery Agent", "status": "running"})
 
     for turn in range(MAX_TURNS):
-        logger.info("agentic_loop_turn", extra={"turn_num": turn, "inc": incident[:50]})
+        logger.info("agentic_loop_turn", extra={"turn_num": turn, "incident": incident[:80]})
 
-        emit({"type": "agent_step", "agent": "Incident Classification Agent", "status": "completed"})
-        emit({"type": "agent_step", "agent": "Kubernetes Discovery Agent", "status": "running"})
+        if turn == 0:
+            preflight_output = record_tool_execution("get_pods", {"namespace": namespace_hint}, turn)
+            dep, ns = _extract_deployment_from_tool_output("get_pods", preflight_output, namespace_hint)
+            if dep and discovered_deployment is None:
+                discovered_deployment = dep
+                discovered_namespace = ns or namespace_hint
+
+            for tool_name, args in _mandatory_follow_up_calls(preflight_output, discovered_namespace or namespace_hint):
+                output = record_tool_execution(tool_name, args, turn)
+                if discovered_deployment is None:
+                    dep, ns = _extract_deployment_from_tool_output(
+                        tool_name,
+                        output,
+                        args.get("namespace", discovered_namespace or namespace_hint),
+                    )
+                    if dep:
+                        discovered_deployment = dep
+                        discovered_namespace = ns or args.get("namespace", namespace_hint)
+
+            emit({"type": "agent_step", "agent": "Kubernetes Discovery Agent", "status": "completed"})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "The orchestrator already collected Kubernetes evidence from the live cluster. "
+                        "Use it before deciding whether more tool calls are needed.\n"
+                        f"{json.dumps(tool_evidence, default=str)}"
+                    ),
+                }
+            )
 
         response = openai_client.responses.create(
             model=model,
@@ -306,9 +448,7 @@ def run_agentic_loop(
             tools=TOOLS_SCHEMA,
         )
 
-        # Preserve ALL output items including reasoning — required by the API.
         messages.extend(response.output)
-
         tool_calls = [
             item
             for item in response.output
@@ -326,55 +466,37 @@ def run_agentic_loop(
                 },
             )
             emit({"type": "agent_step", "agent": "Root Cause Analysis Agent", "status": "running"})
-
-            raw = response.output_text
-            payload = json.loads(raw)
+            payload = json.loads(response.output_text)
             result = InvestigationResponse.model_validate(payload)
-
-            # If the agent did not call get_deployments but we found a deployment
-            # from pod names, also try to extract from the model's recovery_steps
-            # as a last resort.
             if not discovered_deployment:
-                discovered_deployment = _extract_deployment_from_recovery_steps(
-                    result.recovery_steps
-                )
+                discovered_deployment = _extract_deployment_from_recovery_steps(result.recovery_steps)
 
             emit({"type": "agent_step", "agent": "Root Cause Analysis Agent", "status": "completed"})
+            emit({"type": "agent_step", "agent": "Risk Assessment Agent", "status": "running"})
             emit({"type": "agent_step", "agent": "Risk Assessment Agent", "status": "completed"})
-            emit({"type": "agent_step", "agent": "Report Generation Agent", "status": "running"})
-            emit({
-                "type": "complete",
-                "result": result.model_dump(),
-                "tools_called": tools_called,
-                "deployment_name": discovered_deployment,
-                "namespace": discovered_namespace,
-            })
-            return result, tools_called, discovered_deployment, discovered_namespace
+            emit({"type": "agent_step", "agent": "Decision Agent", "status": "running"})
+            emit({"type": "agent_step", "agent": "Decision Agent", "status": "completed"})
+            emit({"type": "agent_step", "agent": "Verification Agent", "status": "running"})
+            emit({"type": "agent_step", "agent": "Verification Agent", "status": "completed"})
+            emit(
+                {
+                    "type": "complete",
+                    "result": result.model_dump(),
+                    "tools_called": tools_called,
+                    "deployment_name": discovered_deployment,
+                    "namespace": discovered_namespace,
+                }
+            )
+            return result, tools_called, discovered_deployment, discovered_namespace, tool_evidence
 
-        tool_results: list[dict[str, Any]] = []
+        function_outputs: list[dict[str, Any]] = []
         for call in tool_calls:
-            args = (
-                json.loads(call.arguments)
-                if isinstance(call.arguments, str)
-                else call.arguments
-            )
+            args = json.loads(call.arguments) if isinstance(call.arguments, str) else call.arguments
             tool_name = call.name
-            tools_called.append(tool_name)
+            output = record_tool_execution(tool_name, args, turn)
 
-            logger.info(
-                "agentic_tool_call",
-                extra={"tool": tool_name, "tool_args": str(args), "turn": turn},
-            )
-            emit({"type": "tool_call", "tool": tool_name, "tool_args": str(args)})
-
-            agent_label = _tool_to_agent_label(tool_name)
-            emit({"type": "agent_step", "agent": agent_label, "status": "running"})
-
-            output = _dispatch(tool_name, args, registry)
-
-            # Extract real deployment name and namespace from this tool's output.
             if discovered_deployment is None:
-                ns_hint = args.get("namespace", "default")
+                ns_hint = args.get("namespace", discovered_namespace or namespace_hint)
                 dep, ns = _extract_deployment_from_tool_output(tool_name, output, ns_hint)
                 if dep:
                     discovered_deployment = dep
@@ -388,18 +510,16 @@ def run_agentic_loop(
                         },
                     )
 
-            emit({"type": "tool_result", "tool": tool_name, "output": output})
-            emit({"type": "agent_step", "agent": agent_label, "status": "completed"})
+            function_outputs.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": call.call_id,
+                    "output": json.dumps(output, default=str),
+                }
+            )
 
-            tool_results.append({
-                "type": "function_call_output",
-                "call_id": call.call_id,
-                "output": json.dumps(output, default=str),
-            })
+        messages.extend(function_outputs)
 
-        messages.extend(tool_results)
-
-    # Turn budget exhausted.
     logger.warning("agentic_loop_turn_budget_exhausted", extra={"incident": incident})
     result = InvestigationResponse(
         summary="Investigation reached turn limit without a definitive conclusion.",
@@ -409,49 +529,13 @@ def run_agentic_loop(
         remediation="Manual investigation is recommended.",
         recovery_steps=["Run kubectl get pods -A and kubectl get events -A manually."],
     )
-    emit({
-        "type": "complete",
-        "result": result.model_dump(),
-        "tools_called": tools_called,
-        "deployment_name": discovered_deployment,
-        "namespace": discovered_namespace,
-    })
-    return result, tools_called, discovered_deployment, discovered_namespace
-
-
-def _tool_to_agent_label(tool_name: str) -> str:
-    mapping = {
-        "get_pods": "Pod Inspection Agent",
-        "get_pod_logs": "Logs Collection Agent",
-        "describe_pod": "Pod Inspection Agent",
-        "get_events": "Events Collection Agent",
-        "get_deployments": "Kubernetes Discovery Agent",
-        "get_nodes": "Node Diagnostics Agent",
-    }
-    return mapping.get(tool_name, "Tool Execution Agent")
-
-
-def _extract_deployment_from_recovery_steps(steps: list[str]) -> str | None:
-    """Parse recovery_steps for a deployment name as a last resort.
-
-    Looks for patterns like 'kubectl rollout restart deployment/NAME'
-    or 'kubectl ... deploy/NAME'.
-    """
-    import re
-
-    for step in steps:
-        match = re.search(
-            r"deployment[s]?/([a-z0-9][a-z0-9-]{1,52})",
-            step,
-            re.IGNORECASE,
-        )
-        if match:
-            return match.group(1)
-        match = re.search(
-            r"deploy/([a-z0-9][a-z0-9-]{1,52})",
-            step,
-            re.IGNORECASE,
-        )
-        if match:
-            return match.group(1)
-    return None
+    emit(
+        {
+            "type": "complete",
+            "result": result.model_dump(),
+            "tools_called": tools_called,
+            "deployment_name": discovered_deployment,
+            "namespace": discovered_namespace,
+        }
+    )
+    return result, tools_called, discovered_deployment, discovered_namespace, tool_evidence
