@@ -1,25 +1,24 @@
-"""Server-Sent Events streaming endpoint for live investigation progress.
-
-The frontend subscribes to this endpoint using the Fetch API with a ReadableStream
-reader. Each SSE event drives one step in the agent workflow pipeline displayed
-in the UI in real time.
-"""
+"""Server-Sent Events streaming endpoint for live investigation progress."""
 
 from __future__ import annotations
 
 import json
 import threading
+import time
 from queue import Empty, Queue
 from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
+from app.core.logging import get_logger
 from app.db.database import find_similar_past_incidents, save_investigation
 from app.schemas.investigation import InvestigationRequest
 from app.services.openai_service import OpenAIService, get_openai_service
+from app.services.report_service import build_and_store_report
 
 router = APIRouter(prefix="/api/v1", tags=["Stream"])
+logger = get_logger(__name__)
 
 _SENTINEL = object()
 
@@ -38,16 +37,7 @@ async def investigate_stream(
     request: InvestigationRequest,
     service: OpenAIService = Depends(get_openai_service),
 ) -> StreamingResponse:
-    """Stream investigation progress as Server-Sent Events.
-
-    The frontend reads this stream using fetch + ReadableStream and drives
-    the agent workflow pipeline UI and terminal panel in real time.
-
-    The deployment name and namespace saved to the database come from what
-    the agent actually discovered in the cluster — not from parsing the
-    incident text — so the Approve remediation action targets the real
-    affected workload.
-    """
+    """Stream investigation progress as Server-Sent Events."""
     queue: Queue[Any] = Queue()
 
     def run() -> None:
@@ -57,25 +47,19 @@ async def investigate_stream(
 
             agent = create_default_investigation_agent(service)
 
-            # Enrich the prompt with similar past incidents if any exist.
             past = find_similar_past_incidents(request.incident, limit=2)
             incident_with_context = request.incident
             if past:
                 context_lines = [
-                    f"- Past incident: {p['incident']} → Root cause: {p['root_cause']}"
+                    f"- Past incident: {p['incident']} -> Root cause: {p['root_cause']}"
                     for p in past
                 ]
                 incident_with_context = (
-                    f"{request.incident}\n\n"
-                    f"Similar past incidents for context:\n"
+                    f"{request.incident}\n\nSimilar past incidents for context:\n"
                     + "\n".join(context_lines)
                 )
 
-            # run_agentic_loop now returns 4 values:
-            # result, tools_called, deployment_name, namespace
-            # deployment_name comes from real tool output — the pod or deployment
-            # the agent actually found in the cluster.
-            result, tools_called, deployment_name, namespace = run_agentic_loop(
+            result, tools_called, deployment_name, namespace, tool_results = run_agentic_loop(
                 incident=incident_with_context,
                 registry=agent.tool_registry,
                 openai_client=service.client,
@@ -83,8 +67,6 @@ async def investigate_stream(
                 event_callback=queue.put,
             )
 
-            # Fallback namespace if the agent only called get_nodes or similar
-            # and never hit a namespaced resource.
             if not namespace:
                 namespace = "default"
 
@@ -98,17 +80,35 @@ async def investigate_stream(
                 deployment_name=deployment_name,
             )
 
-            # Emit the saved event so the frontend gets the investigation_id
-            # and the real deployment_name for the Approve button.
-            queue.put({
-                "type": "saved",
-                "investigation_id": investigation_id,
-                "namespace": namespace,
-                "deployment_name": deployment_name,
-            })
+            queue.put({"type": "agent_step", "agent": "Report Generation Agent", "status": "running", "ts": int(time.time() * 1000)})
+            try:
+                build_and_store_report(
+                    investigation_id=investigation_id,
+                    incident=request.incident,
+                    investigation=result,
+                    tools_called=tools_called,
+                    tool_results=tool_results,
+                    openai_model=service.model,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "stream_report_persist_failed",
+                    extra={"investigation_id": investigation_id, "error": str(exc)},
+                )
+            queue.put({"type": "agent_step", "agent": "Report Generation Agent", "status": "completed", "ts": int(time.time() * 1000)})
+
+            queue.put(
+                {
+                    "type": "saved",
+                    "investigation_id": investigation_id,
+                    "namespace": namespace,
+                    "deployment_name": deployment_name,
+                    "ts": int(time.time() * 1000),
+                }
+            )
 
         except Exception as exc:
-            queue.put({"type": "error", "message": str(exc)})
+            queue.put({"type": "error", "message": str(exc), "ts": int(time.time() * 1000)})
         finally:
             queue.put(_SENTINEL)
 
@@ -117,6 +117,7 @@ async def investigate_stream(
 
     async def generate():
         import asyncio
+
         loop = asyncio.get_event_loop()
         while True:
             item = await loop.run_in_executor(None, _blocking_get, queue)

@@ -14,6 +14,7 @@ export interface InvestigationResult {
 
 export interface AgentEvent {
   type: "agent_step" | "tool_call" | "tool_result" | "complete" | "saved" | "error";
+  ts?: number;
   agent?: string;
   status?: "waiting" | "running" | "completed";
   tool?: string;
@@ -58,6 +59,30 @@ export function useStreamingInvestigation() {
   });
 
   const abortRef = useRef<AbortController | null>(null);
+
+  const applyEvent = useCallback((event: AgentEvent) => {
+    setState((s) => {
+      const next = { ...s, agentEvents: [...s.agentEvents, event] };
+      if (event.type === "tool_call" && event.tool) {
+        next.toolsCalled = [...s.toolsCalled, event.tool];
+      }
+      if (event.type === "complete" && event.result) {
+        next.result = event.result;
+        next.completedAt = new Date().toISOString();
+      }
+      if (event.type === "saved") {
+        next.investigationId = event.investigation_id ?? null;
+        next.namespace = event.namespace ?? null;
+        next.deploymentName = event.deployment_name ?? null;
+        next.loading = false;
+      }
+      if (event.type === "error") {
+        next.error = event.message ?? "Investigation failed.";
+        next.loading = false;
+      }
+      return next;
+    });
+  }, []);
 
   const runInvestigation = useCallback(
     async (nextIncident: string = incident) => {
@@ -110,31 +135,19 @@ export function useStreamingInvestigation() {
             if (!line.startsWith("data: ")) continue;
             try {
               const event: AgentEvent = JSON.parse(line.slice(6));
-              setState((s) => {
-                const next = { ...s, agentEvents: [...s.agentEvents, event] };
-                if (event.type === "tool_call" && event.tool) {
-                  next.toolsCalled = [...s.toolsCalled, event.tool];
-                }
-                if (event.type === "complete" && event.result) {
-                  next.result = event.result;
-                  next.completedAt = new Date().toISOString();
-                  next.loading = false;
-                }
-                if (event.type === "saved") {
-                  next.investigationId = event.investigation_id ?? null;
-                  next.namespace = event.namespace ?? null;
-                  next.deploymentName = event.deployment_name ?? null;
-                  next.loading = false;
-                }
-                if (event.type === "error") {
-                  next.error = event.message ?? "Investigation failed.";
-                  next.loading = false;
-                }
-                return next;
-              });
+              applyEvent(event);
             } catch {
               // ignore malformed lines
             }
+          }
+        }
+
+        if (buffer.startsWith("data: ")) {
+          try {
+            const event: AgentEvent = JSON.parse(buffer.slice(6));
+            applyEvent(event);
+          } catch {
+            // ignore malformed trailing line
           }
         }
       } catch (err) {
@@ -146,7 +159,7 @@ export function useStreamingInvestigation() {
         }));
       }
     },
-    [incident]
+    [applyEvent, incident]
   );
 
   return { incident, setIncident, ...state, runInvestigation };

@@ -15,6 +15,12 @@ from typing import Any
 DB_PATH = Path("/app/data/opspilot.db")
 
 
+def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_sql: str) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    if column_name not in existing:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+
+
 def get_connection() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
@@ -52,6 +58,17 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_investigations_root_cause
             ON investigations (root_cause)
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS reports (
+                investigation_id  INTEGER PRIMARY KEY,
+                created_at        TEXT    NOT NULL,
+                report_json       TEXT    NOT NULL,
+                report_html       TEXT    NOT NULL,
+                report_pdf        BLOB,
+                FOREIGN KEY (investigation_id) REFERENCES investigations (id)
+            )
+        """)
+        _ensure_column(conn, "reports", "report_pdf", "report_pdf BLOB")
         conn.commit()
 
 
@@ -110,6 +127,48 @@ def update_approval_status(investigation_id: int, status: str) -> None:
             (status, investigation_id),
         )
         conn.commit()
+
+
+def save_report(
+    *,
+    investigation_id: int,
+    report_json: dict[str, Any],
+    report_html: str,
+    report_pdf: bytes | None = None,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO reports (investigation_id, created_at, report_json, report_html, report_pdf)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(investigation_id) DO UPDATE SET
+                created_at=excluded.created_at,
+                report_json=excluded.report_json,
+                report_html=excluded.report_html,
+                report_pdf=excluded.report_pdf
+            """,
+            (
+                investigation_id,
+                datetime.now(timezone.utc).isoformat(),
+                json.dumps(report_json),
+                report_html,
+                report_pdf,
+            ),
+        )
+        conn.commit()
+
+
+def get_report(investigation_id: int) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT investigation_id, created_at, report_json, report_html, report_pdf FROM reports WHERE investigation_id = ?",
+            (investigation_id,),
+        ).fetchone()
+    if not row:
+        return None
+    payload = dict(row)
+    payload["report_json"] = json.loads(payload["report_json"])
+    return payload
 
 
 def get_recent_investigations(limit: int = 20) -> list[dict[str, Any]]:
