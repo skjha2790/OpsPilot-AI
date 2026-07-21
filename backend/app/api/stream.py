@@ -8,6 +8,7 @@ in the UI in real time.
 from __future__ import annotations
 
 import json
+import time
 import threading
 from queue import Empty, Queue
 from typing import Any
@@ -16,10 +17,13 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.db.database import find_similar_past_incidents, save_investigation
+from app.core.logging import get_logger
+from app.services.report_service import build_and_store_report
 from app.schemas.investigation import InvestigationRequest
 from app.services.openai_service import OpenAIService, get_openai_service
 
 router = APIRouter(prefix="/api/v1", tags=["Stream"])
+logger = get_logger(__name__)
 
 _SENTINEL = object()
 
@@ -71,11 +75,11 @@ async def investigate_stream(
                     + "\n".join(context_lines)
                 )
 
-            # run_agentic_loop now returns 4 values:
-            # result, tools_called, deployment_name, namespace
+            # run_agentic_loop returns the result, selected tools, real target,
+            # and the gathered tool evidence used for downstream report storage.
             # deployment_name comes from real tool output — the pod or deployment
             # the agent actually found in the cluster.
-            result, tools_called, deployment_name, namespace = run_agentic_loop(
+            result, tools_called, deployment_name, namespace, tool_results = run_agentic_loop(
                 incident=incident_with_context,
                 registry=agent.tool_registry,
                 openai_client=service.client,
@@ -97,6 +101,22 @@ async def investigate_stream(
                 namespace=namespace,
                 deployment_name=deployment_name,
             )
+            queue.put({"type": "agent_step", "agent": "Report Generation Agent", "status": "running", "ts": int(time.time() * 1000)})
+            try:
+                build_and_store_report(
+                    investigation_id=investigation_id,
+                    incident=request.incident,
+                    investigation=result,
+                    tools_called=tools_called,
+                    tool_results=tool_results,
+                    openai_model=service.model,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "stream_report_persist_failed",
+                    extra={"investigation_id": investigation_id, "error": str(exc)},
+                )
+            queue.put({"type": "agent_step", "agent": "Report Generation Agent", "status": "completed", "ts": int(time.time() * 1000)})
 
             # Emit the saved event so the frontend gets the investigation_id
             # and the real deployment_name for the Approve button.
@@ -105,10 +125,11 @@ async def investigate_stream(
                 "investigation_id": investigation_id,
                 "namespace": namespace,
                 "deployment_name": deployment_name,
+                "ts": int(time.time() * 1000),
             })
 
         except Exception as exc:
-            queue.put({"type": "error", "message": str(exc)})
+            queue.put({"type": "error", "message": str(exc), "ts": int(time.time() * 1000)})
         finally:
             queue.put(_SENTINEL)
 

@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "kubernetes>=31.0.0",
     "openai>=2.44.0",
+    "psutil>=6.1.1",
     "pydantic-settings>=2.6.0",
     "python-certifi-win32>=1.6.1",
     "requests>=2.34.2",
